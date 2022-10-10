@@ -364,7 +364,8 @@ def render_j2_template(config, template, data, locale_=None):
         else:
             raise
 
-    return template.render(config=l10n.translate_struct(config, locale_, True),
+    # NOTE: Disabled translation of config struct
+    return template.render(config=config,
                            data=data, locale=locale_, version=__version__)
 
 

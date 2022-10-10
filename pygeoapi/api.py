@@ -2702,8 +2702,8 @@ class API:
                 p = load_plugin('process',
                                 processes_config[key]['processor'])
 
-                p2 = l10n.translate_struct(deepcopy(p.metadata),
-                                           request.locale)
+                # NOTE: Disabled translation of config struct
+                p2 = deepcopy(p.metadata)
 
                 if process is None:
                     p2.pop('inputs')
