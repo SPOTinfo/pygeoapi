@@ -98,9 +98,24 @@ urlpatterns = [
         name='collection-coverage-rangetype',
     ),
     path(
+        'collections/<str:collection_id>/map',
+        views.collection_map,
+        name='collection-map',
+    ),
+    path(
+        'collections/<str:collection_id>/styles/<str:style_id/map',
+        views.collection_style_map,
+        name='collection-style-map',
+    ),
+    path(
         'collections/<str:collection_id>/tiles/',
         views.collection_tiles,
         name='collection-tiles',
+    ),
+    path(
+        'collections/<str:collection_id>/tiles/<str:tileMatrixSetId>',
+        views.collection_tiles_metadata,
+        name='collection-tiles-metadata',
     ),
     path(
         'collections/<str:collection_id>/tiles/<str:tileMatrixSetId>/metadata',

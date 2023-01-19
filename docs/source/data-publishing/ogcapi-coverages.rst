@@ -30,6 +30,9 @@ Connection examples
 rasterio
 ^^^^^^^^
 
+.. note::
+   Requires Python package rasterio
+
 The `rasterio`_ provider plugin reads and extracts any data that rasterio is
 capable of handling.
 
@@ -51,6 +54,9 @@ capable of handling.
 
 xarray
 ^^^^^^
+
+.. note::
+   Requires Python package xarray
 
 The `xarray`_ provider plugin reads and extracts `NetCDF`_ and `Zarr`_ data.
 
@@ -100,6 +106,10 @@ Data access examples
   * http://localhost:5000/collections/foo/coverage?properties=1,3
 * coverage access with subsetting
   * http://localhost:5000/collections/foo/coverage?subset=lat(10,20)&subset=long(10,20)
+* coverage with bbox
+  * http://localhost:5000/collections/foo/coverage?bbox=10,10,20,20
+* coverage with bbox and bbox CRS
+  * http://localhost:5000/collections/foo/coverage?bbox=-8794239.772668611,5311971.846945471,-8348961.809495518,5621521.486192066&bbox=crs=3857
 
 .. note::
    ``.../coverage`` queries which return an alternative representation to CoverageJSON (which prompt a download)

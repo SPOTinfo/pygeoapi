@@ -3,9 +3,12 @@
 # Authors: Tom Kralidis <tomkralidis@gmail.com>
 #          Francesco Bartoli <xbartolone@gmail.com>
 #          Sander Schaminee <sander.schaminee@geocat.net>
+#          John A Stevenson <jostev@bgs.ac.uk>
+#          Colin Blackburn <colb@bgs.ac.uk>
 #
 # Copyright (c) 2022 Tom Kralidis
-# Copyright (c) 2020 Francesco Bartoli
+# Copyright (c) 2022 Francesco Bartoli
+# Copyright (c) 2022 John A Stevenson and Colin Blackburn
 #
 # Permission is hereby granted, free of charge, to any person
 # obtaining a copy of this software and associated documentation
@@ -39,6 +42,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from functools import partial
 from gzip import compress
+from http import HTTPStatus
 import json
 import logging
 import os
@@ -48,6 +52,8 @@ import urllib.parse
 import uuid
 
 from dateutil.parser import parse as dateparse
+from pygeofilter.parsers.ecql import parse as parse_ecql_text
+from pygeofilter.parsers.cql_json import parse as parse_cql_json
 import pytz
 from shapely.errors import WKTReadingError
 from shapely.wkt import loads as shapely_loads
@@ -74,12 +80,14 @@ from pygeoapi.util import (dategetter, DATETIME_FORMAT,
                            json_serial, render_j2_template, str2bool,
                            TEMPLATES, to_json)
 
+from pygeoapi.models.provider.base import TilesMetadataFormat
+
 LOGGER = logging.getLogger(__name__)
 
 #: Return headers for requests (e.g:X-Powered-By)
 HEADERS = {
     'Content-Type': 'application/json',
-    'X-Powered-By': 'pygeoapi {}'.format(__version__)
+    'X-Powered-By': f'pygeoapi {__version__}'
 }
 
 CHARSET = ['utf-8']
@@ -87,12 +95,16 @@ F_JSON = 'json'
 F_HTML = 'html'
 F_JSONLD = 'jsonld'
 F_GZIP = 'gzip'
+F_PNG = 'png'
+F_MVT = 'mvt'
 
 #: Formats allowed for ?f= requests (order matters for complex MIME types)
 FORMAT_TYPES = OrderedDict((
     (F_HTML, 'text/html'),
     (F_JSONLD, 'application/ld+json'),
     (F_JSON, 'application/json'),
+    (F_PNG, 'image/png'),
+    (F_MVT, 'application/vnd.mapbox-vector-tile')
 ))
 
 #: Locale used for system responses (e.g. exceptions)
@@ -119,6 +131,9 @@ CONFORMANCE = {
         'http://www.opengis.net/spec/ogcapi-coverages-1/1.0/conf/coverage-rangesubset',  # noqa
         'http://www.opengis.net/spec/ogcapi-coverages-1/1.0/conf/coverage-bbox',  # noqa
         'http://www.opengis.net/spec/ogcapi-coverages-1/1.0/conf/coverage-datetime'  # noqa
+    ],
+    'map': [
+        'http://www.opengis.net/spec/ogcapi-maps-1/1.0/conf/core'
     ],
     'tile': [
         'http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/core'
@@ -147,8 +162,8 @@ OGC_RELTYPES_BASE = 'http://www.opengis.net/def/rel/ogc/1.0'
 def pre_process(func):
     """
     Decorator that transforms an incoming Request instance specific to the
-    web framework (i.e. Flask or Starlette) into a generic :class:`APIRequest`
-    instance.
+    web framework (i.e. Flask, Starlette or Django) into a generic
+    :class:`APIRequest` instance.
 
     :param func: decorated function
 
@@ -186,7 +201,7 @@ def gzip(func):
                 content = compress(content.encode(charset))
             except TypeError as err:
                 headers.pop('Content-Encoding')
-                LOGGER.error('Error in compression: {}'.format(err))
+                LOGGER.error(f'Error in compression: {err}')
 
         return headers, status, content
 
@@ -207,8 +222,8 @@ class APIRequest:
 
     The following example API method will:
 
-    - transform the incoming Flask/Starlette `Request` into an `APIRequest`
-      using the :func:`pre_process` decorator;
+    - transform the incoming Flask/Starlette/Django `Request` into an
+      `APIRequest`using the :func:`pre_process` decorator;
     - call :meth:`is_valid` to check if the incoming request was valid, i.e.
       that the user requested a valid output format or no format at all
       (which means the default format);
@@ -229,7 +244,7 @@ class APIRequest:
 
           # generate response_body here
 
-          return headers, 200, response_body
+          return headers, HTTPStatus.OK, response_body
 
 
     The following example API method is similar as the one above, but will also
@@ -249,7 +264,7 @@ class APIRequest:
 
           # generate response_body here
 
-          return headers, 200, response_body
+          return headers, HTTPStatus.OK, response_body
 
     Note that you don't *have* to call :meth:`is_valid`, but that you can also
     perform a custom check on the requested output format by looking at the
@@ -636,7 +651,7 @@ class API:
                 'output_dir': None
             }
 
-        LOGGER.debug('Loading process manager {}'.format(manager_def['name']))
+        LOGGER.debug(f"Loading process manager {manager_def['name']}")
         self.manager = load_plugin('process_manager', manager_def)
         LOGGER.info('Process manager plugin loaded')
 
@@ -673,35 +688,34 @@ class API:
             'rel': request.get_linkrel(F_JSON),
             'type': FORMAT_TYPES[F_JSON],
             'title': 'This document as JSON',
-            'href': '{}?f={}'.format(self.config['server']['url'], F_JSON)
+            'href': f"{self.config['server']['url']}?f={F_JSON}"
         }, {
             'rel': request.get_linkrel(F_JSONLD),
             'type': FORMAT_TYPES[F_JSONLD],
             'title': 'This document as RDF (JSON-LD)',
-            'href': '{}?f={}'.format(self.config['server']['url'], F_JSONLD)
+            'href': f"{self.config['server']['url']}?f={F_JSONLD}"
         }, {
             'rel': request.get_linkrel(F_HTML),
             'type': FORMAT_TYPES[F_HTML],
             'title': 'This document as HTML',
-            'href': '{}?f={}'.format(self.config['server']['url'], F_HTML),
+            'href': f"{self.config['server']['url']}?f={F_HTML}",
             'hreflang': self.default_locale
         }, {
             'rel': 'service-desc',
             'type': 'application/vnd.oai.openapi+json;version=3.0',
             'title': 'The OpenAPI definition as JSON',
-            'href': '{}/openapi'.format(self.config['server']['url'])
+            'href': f"{self.config['server']['url']}/openapi"
         }, {
             'rel': 'service-doc',
             'type': FORMAT_TYPES[F_HTML],
             'title': 'The OpenAPI definition as HTML',
-            'href': '{}/openapi?f={}'.format(self.config['server']['url'],
-                                             F_HTML),
+            'href': f"{self.config['server']['url']}/openapi?f={F_HTML}",
             'hreflang': self.default_locale
         }, {
             'rel': 'conformance',
             'type': FORMAT_TYPES[F_JSON],
             'title': 'Conformance',
-            'href': '{}/conformance'.format(self.config['server']['url'])
+            'href': f"{self.config['server']['url']}/conformance"
         }, {
             'rel': 'data',
             'type': FORMAT_TYPES[F_JSON],
@@ -711,12 +725,12 @@ class API:
             'rel': 'http://www.opengis.net/def/rel/ogc/1.0/processes',
             'type': FORMAT_TYPES[F_JSON],
             'title': 'Processes',
-            'href': '{}/processes'.format(self.config['server']['url'])
+            'href': f"{self.config['server']['url']}/processes"
         }, {
             'rel': 'http://www.opengis.net/def/rel/ogc/1.0/job-list',
             'type': FORMAT_TYPES[F_JSON],
             'title': 'Jobs',
-            'href': '{}/jobs'.format(self.config['server']['url'])
+            'href': f"{self.config['server']['url']}/jobs"
         }]
 
         headers = request.get_response_headers()
@@ -735,12 +749,13 @@ class API:
 
             content = render_j2_template(self.config, 'landing_page.html', fcm,
                                          request.locale)
-            return headers, 200, content
+            return headers, HTTPStatus.OK, content
 
         if request.format == F_JSONLD:
-            return headers, 200, to_json(self.fcmld, self.pretty_print)
+            return headers, HTTPStatus.OK, to_json(
+                self.fcmld, self.pretty_print)
 
-        return headers, 200, to_json(fcm, self.pretty_print)
+        return headers, HTTPStatus.OK, to_json(fcm, self.pretty_print)
 
     @gzip
     @pre_process
@@ -772,14 +787,14 @@ class API:
             }
             content = render_j2_template(self.config, template, data,
                                          request.locale)
-            return headers, 200, content
+            return headers, HTTPStatus.OK, content
 
         headers['Content-Type'] = 'application/vnd.oai.openapi+json;version=3.0'  # noqa
 
         if isinstance(openapi, dict):
-            return headers, 200, to_json(openapi, self.pretty_print)
+            return headers, HTTPStatus.OK, to_json(openapi, self.pretty_print)
         else:
-            return headers, 200, openapi
+            return headers, HTTPStatus.OK, openapi
 
     @gzip
     @pre_process
@@ -814,9 +829,9 @@ class API:
         if request.format == F_HTML:  # render
             content = render_j2_template(self.config, 'conformance.html',
                                          conformance, request.locale)
-            return headers, 200, content
+            return headers, HTTPStatus.OK, content
 
-        return headers, 200, to_json(conformance, self.pretty_print)
+        return headers, HTTPStatus.OK, to_json(conformance, self.pretty_print)
 
     @gzip
     @pre_process
@@ -847,7 +862,7 @@ class API:
         if all([dataset is not None, dataset not in collections.keys()]):
             msg = 'Collection not found'
             return self.get_exception(
-                404, headers, request.format, 'NotFound', msg)
+                HTTPStatus.NOT_FOUND, headers, request.format, 'NotFound', msg)
 
         if dataset is not None:
             collections_dict = {
@@ -859,7 +874,7 @@ class API:
         LOGGER.debug('Creating collections')
         for k, v in collections_dict.items():
             if v.get('visibility', 'default') == 'hidden':
-                LOGGER.debug('Skipping hidden layer: {}'.format(k))
+                LOGGER.debug(f'Skipping hidden layer: {k}')
                 continue
             collection_data = get_provider_default(v['providers'])
             collection_data_type = collection_data['type']
@@ -920,34 +935,31 @@ class API:
                 'type': FORMAT_TYPES[F_JSON],
                 'rel': 'root',
                 'title': 'The landing page of this server as JSON',
-                'href': '{}?f={}'.format(self.config['server']['url'], F_JSON)
+                'href': f"{self.config['server']['url']}?f={F_JSON}"
             })
             collection['links'].append({
                 'type': FORMAT_TYPES[F_HTML],
                 'rel': 'root',
                 'title': 'The landing page of this server as HTML',
-                'href': '{}?f={}'.format(self.config['server']['url'], F_HTML)
+                'href': f"{self.config['server']['url']}?f={F_HTML}"
             })
             collection['links'].append({
                 'type': FORMAT_TYPES[F_JSON],
                 'rel': request.get_linkrel(F_JSON),
                 'title': 'This document as JSON',
-                'href': '{}/{}?f={}'.format(
-                    self.get_collections_url(), k, F_JSON)
+                'href': f'{self.get_collections_url()}/{k}?f={F_JSON}'
             })
             collection['links'].append({
                 'type': FORMAT_TYPES[F_JSONLD],
                 'rel': request.get_linkrel(F_JSONLD),
                 'title': 'This document as RDF (JSON-LD)',
-                'href': '{}/{}?f={}'.format(
-                    self.get_collections_url(), k, F_JSONLD)
+                'href': f'{self.get_collections_url()}/{k}?f={F_JSONLD}'
             })
             collection['links'].append({
                 'type': FORMAT_TYPES[F_HTML],
                 'rel': request.get_linkrel(F_HTML),
                 'title': 'This document as HTML',
-                'href': '{}/{}?f={}'.format(
-                    self.get_collections_url(), k, F_HTML)
+                'href': f'{self.get_collections_url()}/{k}?f={F_HTML}'
             })
 
             if collection_data_type in ['feature', 'record', 'tile']:
@@ -958,36 +970,31 @@ class API:
                     'type': FORMAT_TYPES[F_JSON],
                     'rel': 'queryables',
                     'title': 'Queryables for this collection as JSON',
-                    'href': '{}/{}/queryables?f={}'.format(
-                        self.get_collections_url(), k, F_JSON)
+                    'href': f'{self.get_collections_url()}/{k}/queryables?f={F_JSON}'  # noqa
                 })
                 collection['links'].append({
                     'type': FORMAT_TYPES[F_HTML],
                     'rel': 'queryables',
                     'title': 'Queryables for this collection as HTML',
-                    'href': '{}/{}queryables?f={}'.format(
-                        self.get_collections_url(), k, F_HTML)
+                    'href': f'{self.get_collections_url()}/{k}/queryables?f={F_HTML}'  # noqa
                 })
                 collection['links'].append({
                     'type': 'application/geo+json',
                     'rel': 'items',
                     'title': 'items as GeoJSON',
-                    'href': '{}/{}/items?f={}'.format(
-                        self.get_collections_url(), k, F_JSON)
+                    'href': f'{self.get_collections_url()}/{k}/items?f={F_JSON}'  # noqa
                 })
                 collection['links'].append({
                     'type': FORMAT_TYPES[F_JSONLD],
                     'rel': 'items',
                     'title': 'items as RDF (GeoJSON-LD)',
-                    'href': '{}/{}/items?f={}'.format(
-                        self.get_collections_url(), k, F_JSONLD)
+                    'href': f'{self.get_collections_url()}/{k}/items?f={F_JSONLD}'  # noqa
                 })
                 collection['links'].append({
                     'type': FORMAT_TYPES[F_HTML],
                     'rel': 'items',
                     'title': 'Items as HTML',
-                    'href': '{}/{}/items?f={}'.format(
-                        self.get_collections_url(), k, F_HTML)
+                    'href': f'{self.get_collections_url()}/{k}/items?f={F_HTML}'  # noqa
                 })
 
             elif collection_data_type == 'coverage':
@@ -997,59 +1004,52 @@ class API:
                     'type': FORMAT_TYPES[F_JSON],
                     'rel': 'collection',
                     'title': 'Detailed Coverage metadata in JSON',
-                    'href': '{}/{}?f={}'.format(
-                        self.get_collections_url(), k, F_JSON)
+                    'href': f'{self.get_collections_url()}/{k}?f={F_JSON}'
                 })
                 collection['links'].append({
                     'type': FORMAT_TYPES[F_HTML],
                     'rel': 'collection',
                     'title': 'Detailed Coverage metadata in HTML',
-                    'href': '{}/{}?f={}'.format(
-                        self.get_collections_url(), k, F_HTML)
+                    'href': f'{self.get_collections_url()}/{k}?f={F_HTML}'
                 })
-                coverage_url = '{}/{}/coverage'.format(
-                        self.get_collections_url(), k)
+                coverage_url = f'{self.get_collections_url()}/{k}/coverage'
 
                 collection['links'].append({
                     'type': FORMAT_TYPES[F_JSON],
-                    'rel': '{}/coverage-domainset'.format(OGC_RELTYPES_BASE),
+                    'rel': f'{OGC_RELTYPES_BASE}/coverage-domainset',
                     'title': 'Coverage domain set of collection in JSON',
-                    'href': '{}/domainset?f={}'.format(coverage_url, F_JSON)
+                    'href': f'{coverage_url}/domainset?f={F_JSON}'
                 })
                 collection['links'].append({
                     'type': FORMAT_TYPES[F_HTML],
-                    'rel': '{}/coverage-domainset'.format(OGC_RELTYPES_BASE),
+                    'rel': f'{OGC_RELTYPES_BASE}/coverage-domainset',
                     'title': 'Coverage domain set of collection in HTML',
-                    'href': '{}/domainset?f={}'.format(coverage_url, F_HTML)
+                    'href': f'{coverage_url}/domainset?f={F_HTML}'
                 })
                 collection['links'].append({
                     'type': FORMAT_TYPES[F_JSON],
-                    'rel': '{}/coverage-rangetype'.format(OGC_RELTYPES_BASE),
+                    'rel': f'{OGC_RELTYPES_BASE}/coverage-rangetype',
                     'title': 'Coverage range type of collection in JSON',
-                    'href': '{}/rangetype?f={}'.format(coverage_url, F_JSON)
+                    'href': f'{coverage_url}/rangetype?f={F_JSON}'
                 })
                 collection['links'].append({
                     'type': FORMAT_TYPES[F_HTML],
-                    'rel': '{}/coverage-rangetype'.format(OGC_RELTYPES_BASE),
+                    'rel': f'{OGC_RELTYPES_BASE}/coverage-rangetype',
                     'title': 'Coverage range type of collection in HTML',
-                    'href': '{}/rangetype?f={}'.format(coverage_url, F_HTML)
+                    'href': f'{coverage_url}/rangetype?f={F_HTML}'
                 })
                 collection['links'].append({
                     'type': 'application/prs.coverage+json',
-                    'rel': '{}/coverage'.format(OGC_RELTYPES_BASE),
+                    'rel': f'{OGC_RELTYPES_BASE}/coverage',
                     'title': 'Coverage data',
-                    'href': '{}/{}/coverage?f={}'.format(
-                        self.get_collections_url(), k, F_JSON)
+                    'href': f'{self.get_collections_url()}/{k}/coverage?f={F_JSON}'  # noqa
                 })
                 if collection_data_format is not None:
                     collection['links'].append({
                         'type': collection_data_format['mimetype'],
-                        'rel': '{}/coverage'.format(OGC_RELTYPES_BASE),
-                        'title': 'Coverage data as {}'.format(
-                            collection_data_format['name']),
-                        'href': '{}/{}/coverage?f={}'.format(
-                            self.get_collections_url(), k,
-                            collection_data_format['name'])
+                        'rel': f'{OGC_RELTYPES_BASE}/coverage',
+                        'title': f"Coverage data as {collection_data_format['name']}",  # noqa
+                        'href': f"{self.get_collections_url()}/{k}/coverage?f={collection_data_format['name']}"  # noqa
                     })
                 if dataset is not None:
                     LOGGER.debug('Creating extended coverage metadata')
@@ -1060,8 +1060,10 @@ class API:
                         p = load_plugin('provider', provider_def)
                     except ProviderConnectionError:
                         msg = 'connection error (check logs)'
-                        return self.get_exception(500, headers, request.format,
-                                                  'NoApplicableCode', msg)
+                        return self.get_exception(
+                            HTTPStatus.INTERNAL_SERVER_ERROR,
+                            headers, request.format,
+                            'NoApplicableCode', msg)
                     except ProviderTypeError:
                         pass
                     else:
@@ -1081,15 +1083,31 @@ class API:
                     'type': FORMAT_TYPES[F_JSON],
                     'rel': 'tiles',
                     'title': 'Tiles as JSON',
-                    'href': '{}/{}/tiles?f={}'.format(
-                        self.get_collections_url(), k, F_JSON)
+                    'href': f'{self.get_collections_url()}/{k}/tiles?f={F_JSON}'  # noqa
                 })
                 collection['links'].append({
                     'type': FORMAT_TYPES[F_HTML],
                     'rel': 'tiles',
                     'title': 'Tiles as HTML',
-                    'href': '{}/{}/tiles?f={}'.format(
-                        self.get_collections_url(), k, F_HTML)
+                    'href': f'{self.get_collections_url()}/{k}/tiles?f={F_HTML}'  # noqa
+                })
+
+            try:
+                map_ = get_provider_by_type(v['providers'], 'map')
+            except ProviderTypeError:
+                map_ = None
+
+            if map_:
+                LOGGER.debug('Adding map links')
+
+                map_mimetype = map_['format']['mimetype']
+                map_format = map_['format']['name']
+
+                collection['links'].append({
+                    'type': map_mimetype,
+                    'rel': 'http://www.opengis.net/def/rel/ogc/1.0/map',
+                    'title': f'Map as {map_format}',
+                    'href': f"{self.config['server']['url']}/collections/{k}/map?f={map_format}"  # noqa
                 })
 
             try:
@@ -1113,21 +1131,20 @@ class API:
                         collection['links'].append({
                             'type': 'application/json',
                             'rel': 'data',
-                            'title': '{} query for this collection as JSON'.format(qt),  # noqa
-                            'href': '{}/{}/{}?f={}'.format(
-                                self.get_collections_url(), k, qt, F_JSON)
+                            'title': f'{qt} query for this collection as JSON',
+                            'href': f'{self.get_collections_url()}/{k}/{qt}?f={F_JSON}'  # noqa
                         })
                         collection['links'].append({
                             'type': FORMAT_TYPES[F_HTML],
                             'rel': 'data',
-                            'title': '{} query for this collection as HTML'.format(qt),  # noqa
-                            'href': '{}/{}/{}?f={}'.format(
-                                self.get_collections_url(), k, qt, F_HTML)
+                            'title': f'{qt} query for this collection as HTML',
+                            'href': f'{self.get_collections_url()}/{k}/{qt}?f={F_HTML}'  # noqa
                         })
                 except ProviderConnectionError:
                     msg = 'connection error (check logs)'
                     return self.get_exception(
-                        500, headers, request.format, 'NoApplicableCode', msg)
+                        HTTPStatus.INTERNAL_SERVER_ERROR, headers,
+                        request.format, 'NoApplicableCode', msg)
                 except ProviderTypeError:
                     pass
 
@@ -1143,19 +1160,19 @@ class API:
                 'type': FORMAT_TYPES[F_JSON],
                 'rel': request.get_linkrel(F_JSON),
                 'title': 'This document as JSON',
-                'href': '{}?f={}'.format(self.get_collections_url(), F_JSON)
+                'href': f'{self.get_collections_url()}?f={F_JSON}'
             })
             fcm['links'].append({
                 'type': FORMAT_TYPES[F_JSONLD],
                 'rel': request.get_linkrel(F_JSONLD),
                 'title': 'This document as RDF (JSON-LD)',
-                'href': '{}?f={}'.format(self.get_collections_url(), F_JSONLD)
+                'href': f'{self.get_collections_url()}?f={F_JSONLD}'
             })
             fcm['links'].append({
                 'type': FORMAT_TYPES[F_HTML],
                 'rel': request.get_linkrel(F_HTML),
                 'title': 'This document as HTML',
-                'href': '{}?f={}'.format(self.get_collections_url(), F_HTML)
+                'href': f'{self.get_collections_url()}?f={F_HTML}'
             })
 
         if request.format == F_HTML:  # render
@@ -1169,7 +1186,7 @@ class API:
                                              'collections/index.html', fcm,
                                              request.locale)
 
-            return headers, 200, content
+            return headers, HTTPStatus.OK, content
 
         if request.format == F_JSONLD:
             jsonld = self.fcmld.copy()
@@ -1181,9 +1198,9 @@ class API:
                     jsonldify_collection(self, c, request.locale)
                     for c in fcm.get('collections', [])
                 ]
-            return headers, 200, to_json(jsonld, self.pretty_print)
+            return headers, HTTPStatus.OK, to_json(jsonld, self.pretty_print)
 
-        return headers, 200, to_json(fcm, self.pretty_print)
+        return headers, HTTPStatus.OK, to_json(fcm, self.pretty_print)
 
     @gzip
     @pre_process
@@ -1208,7 +1225,7 @@ class API:
 
             msg = 'Collection not found'
             return self.get_exception(
-                404, headers, request.format, 'NotFound', msg)
+                HTTPStatus.NOT_FOUND, headers, request.format, 'NotFound', msg)
 
         LOGGER.debug('Creating collection queryables')
         try:
@@ -1222,11 +1239,13 @@ class API:
         except ProviderConnectionError:
             msg = 'connection error (check logs)'
             return self.get_exception(
-                500, headers, request.format, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, request.format,
+                'NoApplicableCode', msg)
         except ProviderQueryError:
             msg = 'query error (check logs)'
             return self.get_exception(
-                500, headers, request.format, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, request.format,
+                'NoApplicableCode', msg)
 
         queryables = {
             'type': 'object',
@@ -1234,8 +1253,7 @@ class API:
                 self.config['resources'][dataset]['title'], request.locale),
             'properties': {},
             '$schema': 'http://json-schema.org/draft/2019-09/schema',
-            '$id': '{}/{}/queryables'.format(
-                self.get_collections_url(), dataset)
+            '$id': f'{self.get_collections_url()}/{dataset}/queryables'
         }
 
         if p.fields:
@@ -1269,11 +1287,11 @@ class API:
                                          'collections/queryables.html',
                                          queryables, request.locale)
 
-            return headers, 200, content
+            return headers, HTTPStatus.OK, content
 
         headers['Content-Type'] = 'application/schema+json'
 
-        return headers, 200, to_json(queryables, self.pretty_print)
+        return headers, HTTPStatus.OK, to_json(queryables, self.pretty_print)
 
     @gzip
     @pre_process
@@ -1299,7 +1317,8 @@ class API:
         properties = []
         reserved_fieldnames = ['bbox', 'f', 'lang', 'limit', 'offset',
                                'resulttype', 'datetime', 'sortby',
-                               'properties', 'skipGeometry', 'q']
+                               'properties', 'skipGeometry', 'q',
+                               'filter', 'filter-lang']
 
         collections = filter_dict_by_key_value(self.config['resources'],
                                                'type', 'collection')
@@ -1307,7 +1326,7 @@ class API:
         if dataset not in collections.keys():
             msg = 'Collection not found'
             return self.get_exception(
-                404, headers, request.format, 'NotFound', msg)
+                HTTPStatus.NOT_FOUND, headers, request.format, 'NotFound', msg)
 
         LOGGER.debug('Processing query parameters')
 
@@ -1317,14 +1336,16 @@ class API:
             if offset < 0:
                 msg = 'offset value should be positive or zero'
                 return self.get_exception(
-                    400, headers, request.format, 'InvalidParameterValue', msg)
+                    HTTPStatus.BAD_REQUEST, headers, request.format,
+                    'InvalidParameterValue', msg)
         except TypeError as err:
             LOGGER.warning(err)
             offset = 0
         except ValueError:
             msg = 'offset value should be an integer'
             return self.get_exception(
-                400, headers, request.format, 'InvalidParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'InvalidParameterValue', msg)
 
         LOGGER.debug('Processing limit parameter')
         try:
@@ -1334,14 +1355,16 @@ class API:
             if limit <= 0:
                 msg = 'limit value should be strictly positive'
                 return self.get_exception(
-                    400, headers, request.format, 'InvalidParameterValue', msg)
+                    HTTPStatus.BAD_REQUEST, headers, request.format,
+                    'InvalidParameterValue', msg)
         except TypeError as err:
             LOGGER.warning(err)
             limit = int(self.config['server']['limit'])
         except ValueError:
             msg = 'limit value should be an integer'
             return self.get_exception(
-                400, headers, request.format, 'InvalidParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'InvalidParameterValue', msg)
 
         resulttype = request.params.get('resulttype') or 'results'
 
@@ -1357,7 +1380,8 @@ class API:
             except ValueError as err:
                 msg = str(err)
                 return self.get_exception(
-                    400, headers, request.format, 'InvalidParameterValue', msg)
+                    HTTPStatus.BAD_REQUEST, headers, request.format,
+                    'InvalidParameterValue', msg)
 
         LOGGER.debug('Processing datetime parameter')
         datetime_ = request.params.get('datetime')
@@ -1367,7 +1391,8 @@ class API:
         except ValueError as err:
             msg = str(err)
             return self.get_exception(
-                400, headers, request.format, 'InvalidParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'InvalidParameterValue', msg)
 
         LOGGER.debug('processing q parameter')
         q = request.params.get('q') or None
@@ -1386,20 +1411,23 @@ class API:
             except ProviderTypeError:
                 msg = 'Invalid provider type'
                 return self.get_exception(
-                    400, headers, request.format, 'NoApplicableCode', msg)
+                    HTTPStatus.BAD_REQUEST, headers, request.format,
+                    'NoApplicableCode', msg)
         except ProviderConnectionError:
             msg = 'connection error (check logs)'
             return self.get_exception(
-                500, headers, request.format, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, request.format,
+                'NoApplicableCode', msg)
         except ProviderQueryError:
             msg = 'query error (check logs)'
             return self.get_exception(
-                500, headers, request.format, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, request.format,
+                'NoApplicableCode', msg)
 
         LOGGER.debug('processing property parameters')
         for k, v in request.params.items():
             if k not in reserved_fieldnames and k in list(p.fields.keys()):
-                LOGGER.debug('Adding property filter {}={}'.format(k, v))
+                LOGGER.debug(f'Adding property filter {k}={v}')
                 properties.append((k, v))
 
         LOGGER.debug('processing sort parameter')
@@ -1418,7 +1446,7 @@ class API:
                 if prop not in p.fields.keys():
                     msg = 'bad sort property'
                     return self.get_exception(
-                        400, headers, request.format,
+                        HTTPStatus.BAD_REQUEST, headers, request.format,
                         'InvalidParameterValue', msg)
 
                 sortby.append({'property': prop, 'order': order})
@@ -1436,7 +1464,8 @@ class API:
                          set(properties_to_check))) > 0):
                 msg = 'unknown properties specified'
                 return self.get_exception(
-                    400, headers, request.format, 'InvalidParameterValue', msg)
+                    HTTPStatus.BAD_REQUEST, headers, request.format,
+                    'InvalidParameterValue', msg)
         else:
             select_properties = []
 
@@ -1447,21 +1476,46 @@ class API:
         else:
             skip_geometry = False
 
+        LOGGER.debug('processing filter parameter')
+        cql_text = request.params.get('filter')
+        if cql_text is not None:
+            try:
+                filter_ = parse_ecql_text(cql_text)
+            except Exception as err:
+                LOGGER.error(err)
+                msg = f'Bad CQL string : {cql_text}'
+                return self.get_exception(
+                    HTTPStatus.BAD_REQUEST, headers, request.format,
+                    'InvalidParameterValue', msg)
+        else:
+            filter_ = None
+
+        LOGGER.debug('Processing filter-lang parameter')
+        filter_lang = request.params.get('filter-lang')
+        # Currently only cql-text is handled, but it is optional
+        if filter_lang not in [None, 'cql-text']:
+            msg = 'Invalid filter language'
+            return self.get_exception(
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'InvalidParameterValue', msg)
+
         # Get provider locale (if any)
         prv_locale = l10n.get_plugin_locale(provider_def, request.raw_locale)
 
         LOGGER.debug('Querying provider')
-        LOGGER.debug('offset: {}'.format(offset))
-        LOGGER.debug('limit: {}'.format(limit))
-        LOGGER.debug('resulttype: {}'.format(resulttype))
-        LOGGER.debug('sortby: {}'.format(sortby))
-        LOGGER.debug('bbox: {}'.format(bbox))
-        LOGGER.debug('datetime: {}'.format(datetime_))
-        LOGGER.debug('properties: {}'.format(properties))
-        LOGGER.debug('select properties: {}'.format(select_properties))
-        LOGGER.debug('skipGeometry: {}'.format(skip_geometry))
-        LOGGER.debug('language: {}'.format(prv_locale))
-        LOGGER.debug('q: {}'.format(q))
+        LOGGER.debug(f'offset: {offset}')
+        LOGGER.debug(f'limit: {limit}')
+        LOGGER.debug(f'resulttype: {resulttype}')
+        LOGGER.debug(f'sortby: {sortby}')
+        LOGGER.debug(f'bbox: {bbox}')
+        LOGGER.debug(f'datetime: {datetime_}')
+        LOGGER.debug(f'properties: {properties}')
+        LOGGER.debug(f'select properties: {select_properties}')
+        LOGGER.debug(f'skipGeometry: {skip_geometry}')
+        LOGGER.debug(f'language: {prv_locale}')
+        LOGGER.debug(f'q: {q}')
+        LOGGER.debug(f'cql_text: {cql_text}')
+        LOGGER.debug(f'filter-lang: {filter_lang}')
 
         try:
             content = p.query(offset=offset, limit=limit,
@@ -1470,22 +1524,25 @@ class API:
                               sortby=sortby,
                               select_properties=select_properties,
                               skip_geometry=skip_geometry,
-                              q=q, language=prv_locale)
+                              q=q, language=prv_locale, filterq=filter_)
         except ProviderConnectionError as err:
             LOGGER.error(err)
             msg = 'connection error (check logs)'
             return self.get_exception(
-                500, headers, request.format, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, request.format,
+                'NoApplicableCode', msg)
         except ProviderQueryError as err:
             LOGGER.error(err)
             msg = 'query error (check logs)'
             return self.get_exception(
-                500, headers, request.format, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, request.format,
+                'NoApplicableCode', msg)
         except ProviderGenericError as err:
             LOGGER.error(err)
             msg = 'generic error (check logs)'
             return self.get_exception(
-                500, headers, request.format, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, request.format,
+                'NoApplicableCode', msg)
 
         serialized_query_params = ''
         for k, v in request.params.items():
@@ -1496,25 +1553,22 @@ class API:
                 serialized_query_params += urllib.parse.quote(str(v), safe=',')
 
         # TODO: translate titles
-        uri = '{}/{}/items'.format(self.get_collections_url(), dataset)
+        uri = f'{self.get_collections_url()}/{dataset}/items'
         content['links'] = [{
             'type': 'application/geo+json',
             'rel': request.get_linkrel(F_JSON),
             'title': 'This document as GeoJSON',
-            'href': '{}?f={}{}'.format(
-                uri, F_JSON, serialized_query_params)
+            'href': f'{uri}?f={F_JSON}{serialized_query_params}'
         }, {
             'rel': request.get_linkrel(F_JSONLD),
             'type': FORMAT_TYPES[F_JSONLD],
             'title': 'This document as RDF (JSON-LD)',
-            'href': '{}?f={}{}'.format(
-                uri, F_JSONLD, serialized_query_params)
+            'href': f'{uri}?f={F_JSONLD}{serialized_query_params}'
         }, {
             'type': FORMAT_TYPES[F_HTML],
             'rel': request.get_linkrel(F_HTML),
             'title': 'This document as HTML',
-            'href': '{}?f={}{}'.format(
-                uri, F_HTML, serialized_query_params)
+            'href': f'{uri}?f={F_HTML}{serialized_query_params}'
         }]
 
         if offset > 0:
@@ -1524,9 +1578,7 @@ class API:
                     'type': 'application/geo+json',
                     'rel': 'prev',
                     'title': 'items (prev)',
-                    'href': '{}?offset={}{}'
-                    .format(
-                        uri, prev, serialized_query_params)
+                    'href': f'{uri}?offset={prev}{serialized_query_params}'
                 })
 
         if len(content['features']) == limit:
@@ -1536,9 +1588,7 @@ class API:
                     'type': 'application/geo+json',
                     'rel': 'next',
                     'title': 'items (next)',
-                    'href': '{}?offset={}{}'
-                    .format(
-                        uri, next_, serialized_query_params)
+                    'href': f'{uri}?offset={next_}{serialized_query_params}'
                 })
 
         content['links'].append(
@@ -1578,7 +1628,7 @@ class API:
             content = render_j2_template(self.config,
                                          'collections/items/index.html',
                                          content, request.locale)
-            return headers, 200, content
+            return headers, HTTPStatus.OK, content
         elif request.format == 'csv':  # render
             formatter = load_plugin('formatter',
                                     {'name': 'CSV', 'geom': True})
@@ -1596,27 +1646,27 @@ class API:
                 LOGGER.error(err)
                 msg = 'Error serializing output'
                 return self.get_exception(
-                    500, headers, request.format, 'NoApplicableCode', msg)
+                    HTTPStatus.INTERNAL_SERVER_ERROR, headers, request.format,
+                    'NoApplicableCode', msg)
 
-            headers['Content-Type'] = '{}; charset={}'.format(
-                formatter.mimetype, self.config['server']['encoding'])
+            headers['Content-Type'] = f"{formatter.mimetype}; charset={self.config['server']['encoding']}"  # noqa
 
             if p.filename is None:
-                filename = '{}.csv'.format(dataset)
+                filename = f'{dataset}.csv'
             else:
-                filename = '{}'.format(p.filename)
+                filename = f'{p.filename}'
 
-            cd = 'attachment; filename="{}"'.format(filename)
+            cd = f'attachment; filename="{filename}"'
             headers['Content-Disposition'] = cd
 
-            return headers, 200, content
+            return headers, HTTPStatus.OK, content
 
         elif request.format == F_JSONLD:
             content = geojson2jsonld(
                 self.config, content, dataset, id_field=(p.uri_field or 'id')
             )
 
-        return headers, 200, to_json(content, self.pretty_print)
+        return headers, HTTPStatus.OK, to_json(content, self.pretty_print)
 
     @gzip
     @pre_process
@@ -1653,7 +1703,8 @@ class API:
         if dataset not in collections.keys():
             msg = 'Invalid collection'
             return self.get_exception(
-                400, headers, request.format, 'InvalidParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'InvalidParameterValue', msg)
 
         LOGGER.debug('Processing query parameters')
 
@@ -1663,14 +1714,16 @@ class API:
             if offset < 0:
                 msg = 'offset value should be positive or zero'
                 return self.get_exception(
-                    400, headers, request.format, 'InvalidParameterValue', msg)
+                    HTTPStatus.BAD_REQUEST, headers, request.format,
+                    'InvalidParameterValue', msg)
         except TypeError as err:
             LOGGER.warning(err)
             offset = 0
         except ValueError:
             msg = 'offset value should be an integer'
             return self.get_exception(
-                400, headers, request.format, 'InvalidParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'InvalidParameterValue', msg)
 
         LOGGER.debug('Processing limit parameter')
         try:
@@ -1680,14 +1733,16 @@ class API:
             if limit <= 0:
                 msg = 'limit value should be strictly positive'
                 return self.get_exception(
-                    400, headers, request.format, 'InvalidParameterValue', msg)
+                    HTTPStatus.BAD_REQUEST, headers, request.format,
+                    'InvalidParameterValue', msg)
         except TypeError as err:
             LOGGER.warning(err)
             limit = int(self.config['server']['limit'])
         except ValueError:
             msg = 'limit value should be an integer'
             return self.get_exception(
-                400, headers, request.format, 'InvalidParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'InvalidParameterValue', msg)
 
         resulttype = request.params.get('resulttype') or 'results'
 
@@ -1703,7 +1758,8 @@ class API:
             except ValueError as err:
                 msg = str(err)
                 return self.get_exception(
-                    400, headers, request.format, 'InvalidParameterValue', msg)
+                    HTTPStatus.BAD_REQUEST, headers, request.format,
+                    'InvalidParameterValue', msg)
 
         LOGGER.debug('Processing datetime parameter')
         datetime_ = request.params.get('datetime')
@@ -1713,7 +1769,8 @@ class API:
         except ValueError as err:
             msg = str(err)
             return self.get_exception(
-                400, headers, request.format, 'InvalidParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'InvalidParameterValue', msg)
 
         LOGGER.debug('processing q parameter')
         val = request.params.get('q')
@@ -1734,24 +1791,28 @@ class API:
             except ProviderTypeError:
                 msg = 'Invalid provider type'
                 return self.get_exception(
-                    400, headers, request.format, 'NoApplicableCode', msg)
+                    HTTPStatus.BAD_REQUEST, headers, request.format,
+                    'NoApplicableCode', msg)
         except ProviderConnectionError:
             msg = 'connection error (check logs)'
             return self.get_exception(
-                500, headers, request.format, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, request.format,
+                'NoApplicableCode', msg)
         except ProviderQueryError:
             msg = 'query error (check logs)'
             return self.get_exception(
-                500, headers, request.format, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, request.format,
+                'NoApplicableCode', msg)
 
         LOGGER.debug('processing property parameters')
         for k, v in request.params.items():
             if k not in reserved_fieldnames and k not in p.fields.keys():
-                msg = 'unknown query parameter: {}'.format(k)
+                msg = f'unknown query parameter: {k}'
                 return self.get_exception(
-                    400, headers, request.format, 'InvalidParameterValue', msg)
+                    HTTPStatus.BAD_REQUEST, headers, request.format,
+                    'InvalidParameterValue', msg)
             elif k not in reserved_fieldnames and k in p.fields.keys():
-                LOGGER.debug('Add property filter {}={}'.format(k, v))
+                LOGGER.debug(f'Add property filter {k}={v}')
                 properties.append((k, v))
 
         LOGGER.debug('processing sort parameter')
@@ -1770,7 +1831,7 @@ class API:
                 if prop not in p.fields.keys():
                     msg = 'bad sort property'
                     return self.get_exception(
-                        400, headers, request.format,
+                        HTTPStatus.BAD_REQUEST, headers, request.format,
                         'InvalidParameterValue', msg)
 
                 sortby.append({'property': prop, 'order': order})
@@ -1788,7 +1849,8 @@ class API:
                          set(properties_to_check))) > 0):
                 msg = 'unknown properties specified'
                 return self.get_exception(
-                    400, headers, request.format, 'InvalidParameterValue', msg)
+                    HTTPStatus.BAD_REQUEST, headers, request.format,
+                    'InvalidParameterValue', msg)
         else:
             select_properties = []
 
@@ -1801,24 +1863,23 @@ class API:
 
         LOGGER.debug('Processing filter-lang parameter')
         filter_lang = request.params.get('filter-lang')
-        if filter_lang == 'cql-json':  # @TODO add check from the configuration
-            val = filter_lang
-        else:
+        if filter_lang != 'cql-json':  # @TODO add check from the configuration
             msg = 'Invalid filter language'
             return self.get_exception(
-                400, headers, request.format, 'InvalidParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'InvalidParameterValue', msg)
 
         LOGGER.debug('Querying provider')
-        LOGGER.debug('offset: {}'.format(offset))
-        LOGGER.debug('limit: {}'.format(limit))
-        LOGGER.debug('resulttype: {}'.format(resulttype))
-        LOGGER.debug('sortby: {}'.format(sortby))
-        LOGGER.debug('bbox: {}'.format(bbox))
-        LOGGER.debug('datetime: {}'.format(datetime_))
-        LOGGER.debug('properties: {}'.format(select_properties))
-        LOGGER.debug('skipGeometry: {}'.format(skip_geometry))
-        LOGGER.debug('q: {}'.format(q))
-        LOGGER.debug('filter-lang: {}'.format(filter_lang))
+        LOGGER.debug(f'offset: {offset}')
+        LOGGER.debug(f'limit: {limit}')
+        LOGGER.debug(f'resulttype: {resulttype}')
+        LOGGER.debug(f'sortby: {sortby}')
+        LOGGER.debug(f'bbox: {bbox}')
+        LOGGER.debug(f'datetime: {datetime_}')
+        LOGGER.debug(f'properties: {select_properties}')
+        LOGGER.debug(f'skipGeometry: {skip_geometry}')
+        LOGGER.debug(f'q: {q}')
+        LOGGER.debug(f'filter-lang: {filter_lang}')
 
         LOGGER.debug('Processing headers')
 
@@ -1828,23 +1889,52 @@ class API:
                 'content-type')) != 'application/query-cql-json':
             msg = ('Invalid body content-type')
             return self.get_exception(
-                400, headers, request.format, 'InvalidHeaderValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'InvalidHeaderValue', msg)
 
         LOGGER.debug('Processing body')
 
         if not request.data:
             msg = 'missing request data'
             return self.get_exception(
-                400, headers, request.format, 'MissingParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'MissingParameterValue', msg)
 
+        filter_ = None
         try:
             # Parse bytes data, if applicable
             data = request.data.decode()
             LOGGER.debug(data)
-            # @TODO validation function
-            filter_ = None
-            if val:
+        except UnicodeDecodeError as err:
+            LOGGER.error(err)
+            msg = 'Unicode error in data'
+            return self.get_exception(
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'InvalidParameterValue', msg)
+
+        # FIXME: remove testing backend in use once CQL support is normalized
+        if p.name == 'PostgreSQL':
+            LOGGER.debug('processing PostgreSQL CQL_JSON data')
+            try:
+                filter_ = parse_cql_json(data)
+            except Exception as err:
+                LOGGER.error(err)
+                msg = f'Bad CQL string : {data}'
+                return self.get_exception(
+                    HTTPStatus.BAD_REQUEST, headers, request.format,
+                    'InvalidParameterValue', msg)
+        else:
+            LOGGER.debug('processing Elasticsearch CQL_JSON data')
+            try:
                 filter_ = CQLModel.parse_raw(data)
+            except Exception as err:
+                LOGGER.error(err)
+                msg = f'Bad CQL string : {data}'
+                return self.get_exception(
+                    HTTPStatus.BAD_REQUEST, headers, request.format,
+                    'InvalidParameterValue', msg)
+
+        try:
             content = p.query(offset=offset, limit=limit,
                               resulttype=resulttype, bbox=bbox,
                               datetime_=datetime_, properties=properties,
@@ -1853,10 +1943,26 @@ class API:
                               skip_geometry=skip_geometry,
                               q=q,
                               filterq=filter_)
-        except (UnicodeDecodeError, AttributeError):
-            pass
+        except ProviderConnectionError as err:
+            LOGGER.error(err)
+            msg = 'connection error (check logs)'
+            return self.get_exception(
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, request.format,
+                'NoApplicableCode', msg)
+        except ProviderQueryError as err:
+            LOGGER.error(err)
+            msg = 'query error (check logs)'
+            return self.get_exception(
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, request.format,
+                'NoApplicableCode', msg)
+        except ProviderGenericError as err:
+            LOGGER.error(err)
+            msg = 'generic error (check logs)'
+            return self.get_exception(
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, request.format,
+                'NoApplicableCode', msg)
 
-        return headers, 200, to_json(content, self.pretty_print)
+        return headers, HTTPStatus.OK, to_json(content, self.pretty_print)
 
     @gzip
     @pre_process
@@ -1886,7 +1992,7 @@ class API:
             msg = 'Collection not found'
             LOGGER.error(msg)
             return self.get_exception(
-                404, headers, request.format, 'NotFound', msg)
+                HTTPStatus.NOT_FOUND, headers, request.format, 'NotFound', msg)
 
         LOGGER.debug('Loading provider')
         try:
@@ -1902,44 +2008,48 @@ class API:
                 msg = 'Invalid provider type'
                 LOGGER.error(msg)
                 return self.get_exception(
-                    400, headers, request.format, 'InvalidParameterValue', msg)
+                    HTTPStatus.BAD_REQUEST, headers, request.format,
+                    'InvalidParameterValue', msg)
 
         if not p.editable:
             msg = 'Collection is not editable'
             LOGGER.error(msg)
             return self.get_exception(
-                400, headers, request.format, 'InvalidParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'InvalidParameterValue', msg)
 
         if action in ['create', 'update'] and not request.data:
             msg = 'No data found'
             LOGGER.error(msg)
             return self.get_exception(
-                400, headers, request.format, 'InvalidParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'InvalidParameterValue', msg)
 
         if action == 'create':
             LOGGER.debug('Creating item')
             try:
                 identifier = p.create(request.data)
-            except ProviderInvalidDataError as err:
+            except (ProviderInvalidDataError, TypeError) as err:
                 msg = str(err)
                 return self.get_exception(
-                    400, headers, request.format, 'InvalidParameterValue', msg)
+                    HTTPStatus.BAD_REQUEST, headers, request.format,
+                    'InvalidParameterValue', msg)
 
-            headers['Location'] = '{}/{}/items/{}'.format(
-                self.get_collections_url(), dataset, identifier)
+            headers['Location'] = f'{self.get_collections_url()}/{dataset}/items/{identifier}'  # noqa
 
-            return headers, 201, ''
+            return headers, HTTPStatus.CREATED, ''
 
         if action == 'update':
             LOGGER.debug('Updating item')
             try:
                 _ = p.update(identifier, request.data)
-            except ProviderGenericError as err:
+            except (ProviderInvalidDataError, TypeError) as err:
                 msg = str(err)
                 return self.get_exception(
-                    400, headers, request.format, 'InvalidParameterValue', msg)
+                    HTTPStatus.BAD_REQUEST, headers, request.format,
+                    'InvalidParameterValue', msg)
 
-            return headers, 204, ''
+            return headers, HTTPStatus.NO_CONTENT, ''
 
         if action == 'delete':
             LOGGER.debug('Deleting item')
@@ -1948,9 +2058,10 @@ class API:
             except ProviderGenericError as err:
                 msg = str(err)
                 return self.get_exception(
-                    400, headers, request.format, 'InvalidParameterValue', msg)
+                    HTTPStatus.BAD_REQUEST, headers, request.format,
+                    'InvalidParameterValue', msg)
 
-            return headers, 200, ''
+            return headers, HTTPStatus.OK, ''
 
     @gzip
     @pre_process
@@ -1981,7 +2092,7 @@ class API:
         if dataset not in collections.keys():
             msg = 'Collection not found'
             return self.get_exception(
-                404, headers, request.format, 'NotFound', msg)
+                HTTPStatus.NOT_FOUND, headers, request.format, 'NotFound', msg)
 
         LOGGER.debug('Loading provider')
 
@@ -1997,42 +2108,45 @@ class API:
             except ProviderTypeError:
                 msg = 'Invalid provider type'
                 return self.get_exception(
-                    400, headers, request.format, 'InvalidParameterValue', msg)
+                    HTTPStatus.BAD_REQUEST, headers, request.format,
+                    'InvalidParameterValue', msg)
 
         # Get provider language (if any)
         prv_locale = l10n.get_plugin_locale(provider_def, request.raw_locale)
 
         try:
-            LOGGER.debug('Fetching id {}'.format(identifier))
+            LOGGER.debug(f'Fetching id {identifier}')
             content = p.get(identifier, language=prv_locale)
         except ProviderConnectionError as err:
             LOGGER.error(err)
             msg = 'connection error (check logs)'
             return self.get_exception(
-                500, headers, request.format, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, request.format,
+                'NoApplicableCode', msg)
         except ProviderItemNotFoundError:
             msg = 'identifier not found'
-            return self.get_exception(404, headers, request.format,
-                                      'NotFound', msg)
+            return self.get_exception(HTTPStatus.NOT_FOUND, headers,
+                                      request.format, 'NotFound', msg)
         except ProviderQueryError as err:
             LOGGER.error(err)
             msg = 'query error (check logs)'
             return self.get_exception(
-                500, headers, request.format, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, request.format,
+                'NoApplicableCode', msg)
         except ProviderGenericError as err:
             LOGGER.error(err)
             msg = 'generic error (check logs)'
             return self.get_exception(
-                500, headers, request.format, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, request.format,
+                'NoApplicableCode', msg)
 
         if content is None:
             msg = 'identifier not found'
-            return self.get_exception(400, headers, request.format,
-                                      'NotFound', msg)
+            return self.get_exception(HTTPStatus.BAD_REQUEST, headers,
+                                      request.format, 'NotFound', msg)
 
         uri = content['properties'].get(p.uri_field) if p.uri_field else \
-            '{}/{}/items/{}'.format(
-                self.get_collections_url(), dataset, identifier)
+            f'{self.get_collections_url()}/{dataset}/items/{identifier}'
 
         if 'links' not in content:
             content['links'] = []
@@ -2041,51 +2155,46 @@ class API:
             'type': FORMAT_TYPES[F_JSON],
             'rel': 'root',
             'title': 'The landing page of this server as JSON',
-            'href': '{}?f={}'.format(self.config['server']['url'], F_JSON)
+            'href': f"{self.config['server']['url']}?f={F_JSON}"
             }, {
             'type': FORMAT_TYPES[F_HTML],
             'rel': 'root',
             'title': 'The landing page of this server as HTML',
-            'href': '{}?f={}'.format(self.config['server']['url'], F_HTML)
+            'href': f"{self.config['server']['url']}?f={F_HTML}"
             }, {
             'rel': request.get_linkrel(F_JSON),
             'type': 'application/geo+json',
             'title': 'This document as GeoJSON',
-            'href': '{}?f={}'.format(uri, F_JSON)
+            'href': f'{uri}?f={F_JSON}'
             }, {
             'rel': request.get_linkrel(F_JSONLD),
             'type': FORMAT_TYPES[F_JSONLD],
             'title': 'This document as RDF (JSON-LD)',
-            'href': '{}?f={}'.format(uri, F_JSONLD)
+            'href': f'{uri}?f={F_JSONLD}'
             }, {
             'rel': request.get_linkrel(F_HTML),
             'type': FORMAT_TYPES[F_HTML],
             'title': 'This document as HTML',
-            'href': '{}?f={}'.format(uri, F_HTML)
+            'href': f'{uri}?f={F_HTML}'
             }, {
             'rel': 'collection',
             'type': FORMAT_TYPES[F_JSON],
             'title': l10n.translate(collections[dataset]['title'],
                                     request.locale),
-            'href': '{}/{}'.format(
-                self.get_collections_url(), dataset)
+            'href': f'{self.get_collections_url()}/{dataset}'
         }])
 
         if 'prev' in content:
             content['links'].append({
                 'rel': 'prev',
                 'type': FORMAT_TYPES[request.format],
-                'href': '{}/{}/items/{}?f={}'.format(
-                    self.get_collections_url(), dataset,
-                    content['prev'], request.format)
+                'href': f"{self.get_collections_url()}/{dataset}/items/{content['prev']}?f={request.format}"  # noqa
             })
         if 'next' in content:
             content['links'].append({
                 'rel': 'next',
                 'type': FORMAT_TYPES[request.format],
-                'href': '{}/{}/items/{}?f={}'.format(
-                    self.get_collections_url(), dataset,
-                    content['next'], request.format)
+                'href': f"{self.get_collections_url()}/{dataset}/items/{content['next']}?f={request.format}"  # noqa
             })
 
         # Set response language to requested provider locale
@@ -2107,14 +2216,14 @@ class API:
             content = render_j2_template(self.config,
                                          'collections/items/item.html',
                                          content, request.locale)
-            return headers, 200, content
+            return headers, HTTPStatus.OK, content
 
         elif request.format == F_JSONLD:
             content = geojson2jsonld(
                 self.config, content, dataset, uri, (p.uri_field or 'id')
             )
 
-        return headers, 200, to_json(content, self.pretty_print)
+        return headers, HTTPStatus.OK, to_json(content, self.pretty_print)
 
     @pre_process
     @jsonldify
@@ -2145,15 +2254,18 @@ class API:
         except KeyError:
             msg = 'collection does not exist'
             return self.get_exception(
-                404, headers, format_, 'InvalidParameterValue', msg)
+                HTTPStatus.NOT_FOUND, headers, format_,
+                'InvalidParameterValue', msg)
         except ProviderTypeError:
             msg = 'invalid provider type'
             return self.get_exception(
-                400, headers, format_, 'NoApplicableCode', msg)
+                HTTPStatus.BAD_REQUEST, headers, format_,
+                'NoApplicableCode', msg)
         except ProviderConnectionError:
             msg = 'connection error (check logs)'
             return self.get_exception(
-                500, headers, format_, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, format_,
+                'NoApplicableCode', msg)
 
         LOGGER.debug('Processing bbox parameter')
 
@@ -2167,13 +2279,20 @@ class API:
             except ValueError as err:
                 msg = str(err)
                 return self.get_exception(
-                    500, headers, format_, 'InvalidParameterValue', msg)
+                    HTTPStatus.INTERNAL_SERVER_ERROR, headers, format_,
+                    'InvalidParameterValue', msg)
 
         query_args['bbox'] = bbox
 
+        LOGGER.debug('Processing bbox-crs parameter')
+
+        bbox_crs = request.params.get('bbox-crs')
+        if bbox_crs is not None:
+            query_args['bbox_crs'] = bbox_crs
+
         LOGGER.debug('Processing datetime parameter')
 
-        datetime_ = request.params.get('datetime', None)
+        datetime_ = request.params.get('datetime')
 
         try:
             datetime_ = validate_datetime(
@@ -2181,7 +2300,8 @@ class API:
         except ValueError as err:
             msg = str(err)
             return self.get_exception(
-                400, headers, format_, 'InvalidParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, format_,
+                'InvalidParameterValue', msg)
 
         query_args['datetime_'] = datetime_
 
@@ -2194,60 +2314,66 @@ class API:
             LOGGER.debug('Processing properties parameter')
             query_args['properties'] = [rs for
                                         rs in properties.split(',') if rs]
-            LOGGER.debug('Fields: {}'.format(query_args['properties']))
+            LOGGER.debug(f"Fields: {query_args['properties']}")
 
             for a in query_args['properties']:
                 if a not in p.fields:
                     msg = 'Invalid field specified'
                     return self.get_exception(
-                        400, headers, format_, 'InvalidParameterValue', msg)
+                        HTTPStatus.BAD_REQUEST, headers, format_,
+                        'InvalidParameterValue', msg)
 
         if 'subset' in request.params:
             LOGGER.debug('Processing subset parameter')
             try:
                 subsets = validate_subset(request.params['subset'] or '')
             except (AttributeError, ValueError) as err:
-                msg = 'Invalid subset: {}'.format(err)
+                msg = f'Invalid subset: {err}'
                 LOGGER.error(msg)
                 return self.get_exception(
-                        400, headers, format_, 'InvalidParameterValue', msg)
+                        HTTPStatus.BAD_REQUEST, headers, format_,
+                        'InvalidParameterValue', msg)
 
             if not set(subsets.keys()).issubset(p.axes):
                 msg = 'Invalid axis name'
                 LOGGER.error(msg)
                 return self.get_exception(
-                    400, headers, format_, 'InvalidParameterValue', msg)
+                    HTTPStatus.BAD_REQUEST, headers, format_,
+                    'InvalidParameterValue', msg)
 
             query_args['subsets'] = subsets
-            LOGGER.debug('Subsets: {}'.format(query_args['subsets']))
+            LOGGER.debug(f"Subsets: {query_args['subsets']}")
 
         LOGGER.debug('Querying coverage')
         try:
             data = p.query(**query_args)
         except ProviderInvalidQueryError as err:
-            msg = 'query error: {}'.format(err)
+            msg = f'query error: {err}'
             return self.get_exception(
-                400, headers, format_, 'InvalidParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, format_,
+                'InvalidParameterValue', msg)
         except ProviderNoDataError:
             msg = 'No data found'
             return self.get_exception(
-                204, headers, format_, 'InvalidParameterValue', msg)
+                HTTPStatus.NO_CONTENT, headers, format_,
+                'InvalidParameterValue', msg)
         except ProviderQueryError:
             msg = 'query error (check logs)'
             return self.get_exception(
-                500, headers, format_, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, format_,
+                'NoApplicableCode', msg)
 
         mt = collection_def['format']['name']
         if format_ == mt:  # native format
             if p.filename is not None:
-                cd = 'attachment; filename="{}"'.format(p.filename)
+                cd = f'attachment; filename="{p.filename}"'
                 headers['Content-Disposition'] = cd
 
             headers['Content-Type'] = collection_def['format']['mimetype']
-            return headers, 200, data
+            return headers, HTTPStatus.OK, data
         elif format_ == F_JSON:
             headers['Content-Type'] = 'application/prs.coverage+json'
-            return headers, 200, to_json(data, self.pretty_print)
+            return headers, HTTPStatus.OK, to_json(data, self.pretty_print)
         else:
             return self.get_format_exception(request)
 
@@ -2280,18 +2406,21 @@ class API:
         except KeyError:
             msg = 'collection does not exist'
             return self.get_exception(
-                404, headers, format_, 'InvalidParameterValue', msg)
+                HTTPStatus.NOT_FOUND, headers, format_,
+                'InvalidParameterValue', msg)
         except ProviderTypeError:
             msg = 'invalid provider type'
             return self.get_exception(
-                500, headers, format_, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, format_,
+                'NoApplicableCode', msg)
         except ProviderConnectionError:
             msg = 'connection error (check logs)'
             return self.get_exception(
-                500, headers, format_, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, format_,
+                'NoApplicableCode', msg)
 
         if format_ == F_JSON:
-            return headers, 200, to_json(data, self.pretty_print)
+            return headers, HTTPStatus.OK, to_json(data, self.pretty_print)
 
         elif format_ == F_HTML:
             data['id'] = dataset
@@ -2302,7 +2431,7 @@ class API:
             content = render_j2_template(self.config,
                                          'collections/coverage/domainset.html',
                                          data, self.default_locale)
-            return headers, 200, content
+            return headers, HTTPStatus.OK, content
         else:
             return self.get_format_exception(request)
 
@@ -2334,18 +2463,21 @@ class API:
         except KeyError:
             msg = 'collection does not exist'
             return self.get_exception(
-                404, headers, format_, 'InvalidParameterValue', msg)
+                HTTPStatus.NOT_FOUND, headers, format_,
+                'InvalidParameterValue', msg)
         except ProviderTypeError:
             msg = 'invalid provider type'
             return self.get_exception(
-                500, headers, format_, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, format_,
+                'NoApplicableCode', msg)
         except ProviderConnectionError:
             msg = 'connection error (check logs)'
             return self.get_exception(
-                500, headers, format_, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, format_,
+                'NoApplicableCode', msg)
 
         if format_ == F_JSON:
-            return headers, 200, to_json(data, self.pretty_print)
+            return headers, HTTPStatus.OK, to_json(data, self.pretty_print)
 
         elif format_ == F_HTML:
             data['id'] = dataset
@@ -2356,7 +2488,7 @@ class API:
             content = render_j2_template(self.config,
                                          'collections/coverage/rangetype.html',
                                          data, self.default_locale)
-            return headers, 200, content
+            return headers, HTTPStatus.OK, content
         else:
             return self.get_format_exception(request)
 
@@ -2383,7 +2515,7 @@ class API:
 
             msg = 'Collection not found'
             return self.get_exception(
-                404, headers, request.format, 'NotFound', msg)
+                HTTPStatus.NOT_FOUND, headers, request.format, 'NotFound', msg)
 
         LOGGER.debug('Creating collection tiles')
         LOGGER.debug('Loading provider')
@@ -2394,15 +2526,18 @@ class API:
         except (KeyError, ProviderTypeError):
             msg = 'Invalid collection tiles'
             return self.get_exception(
-                400, headers, request.format, 'InvalidParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'InvalidParameterValue', msg)
         except ProviderConnectionError:
             msg = 'connection error (check logs)'
             return self.get_exception(
-                500, headers, request.format, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, request.format,
+                'NoApplicableCode', msg)
         except ProviderQueryError:
             msg = 'query error (check logs)'
             return self.get_exception(
-                500, headers, request.format, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, request.format,
+                'NoApplicableCode', msg)
 
         tiles = {
             'links': [],
@@ -2413,29 +2548,25 @@ class API:
             'type': FORMAT_TYPES[F_JSON],
             'rel': request.get_linkrel(F_JSON),
             'title': 'This document as JSON',
-            'href': '{}/{}/tiles?f={}'.format(
-                self.get_collections_url(), dataset, F_JSON)
+            'href': f'{self.get_collections_url()}/{dataset}/tiles?f={F_JSON}'
         })
         tiles['links'].append({
             'type': FORMAT_TYPES[F_JSONLD],
             'rel': request.get_linkrel(F_JSONLD),
             'title': 'This document as RDF (JSON-LD)',
-            'href': '{}/{}/tiles?f={}'.format(
-                self.get_collections_url(), dataset, F_JSONLD)
+            'href': f'{self.get_collections_url()}/{dataset}/tiles?f={F_JSONLD}'  # noqa
         })
         tiles['links'].append({
             'type': FORMAT_TYPES[F_HTML],
             'rel': request.get_linkrel(F_HTML),
             'title': 'This document as HTML',
-            'href': '{}/{}/tiles?f={}'.format(
-                self.get_collections_url(), dataset, F_HTML)
+            'href': f'{self.get_collections_url()}/{dataset}/tiles?f={F_HTML}'
         })
 
         tile_services = p.get_tiles_service(
             baseurl=self.config['server']['url'],
-            servicepath='{}/{}/tiles/{{{}}}/{{{}}}/{{{}}}/{{{}}}?f=mvt'
-            .format(self.get_collections_url(), dataset, 'tileMatrixSetId',
-                    'tileMatrix', 'tileRow', 'tileCol'))
+            servicepath=f'{self.get_collections_url()}/{dataset}/tiles/{{tileMatrixSetId}}/{{tileMatrix}}/{{tileRow}}/{{tileCol}}?f=mvt'  # noqa
+        )
 
         for service in tile_services['links']:
             tiles['links'].append(service)
@@ -2445,28 +2576,22 @@ class API:
         for matrix in tiling_schemes:
             tile_matrix = {
                 'title': dataset,
-                'tileMatrixSetURI': matrix['tileMatrixSetURI'],
-                'crs': matrix['crs'],
+                'tileMatrixSetURI': matrix.tileMatrixSetURI,
+                'crs': matrix.crs,
                 'dataType': 'vector',
                 'links': []
             }
             tile_matrix['links'].append({
                 'type': FORMAT_TYPES[F_JSON],
                 'rel': request.get_linkrel(F_JSON),
-                'title': '{} - {} - {}'.format(
-                    dataset, matrix['tileMatrixSet'], F_JSON),
-                'href': '{}/{}/tiles/{}?f={}'.format(
-                    self.get_collections_url(), dataset,
-                    matrix['tileMatrixSet'], F_JSON)
+                'title': f'{dataset} - {matrix.tileMatrixSet} - {F_JSON}',
+                'href': f'{self.get_collections_url()}/{dataset}/tiles/{matrix.tileMatrixSet}?f={F_JSON}'  # noqa
             })
             tile_matrix['links'].append({
                 'type': FORMAT_TYPES[F_HTML],
                 'rel': request.get_linkrel(F_HTML),
-                'title': '{} - {} - {}'.format(
-                    dataset, matrix['tileMatrixSet'], F_HTML),
-                'href': '{}/{}/tiles/{}?f={}'.format(
-                    self.get_collections_url(), dataset,
-                    matrix['tileMatrixSet'], F_HTML)
+                'title': f'{dataset} - {matrix.tileMatrixSet} - {F_HTML}',
+                'href': f'{self.get_collections_url()}/{dataset}/tiles/{matrix.tileMatrixSet}?f={F_HTML}'  # noqa
             })
             tiles['tilesets'].append(tile_matrix)
 
@@ -2477,7 +2602,7 @@ class API:
             tiles['title'] = l10n.translate(
                 self.config['resources'][dataset]['title'], SYSTEM_LOCALE)
             tiles['tilesets'] = [
-                scheme['tileMatrixSet'] for scheme in p.get_tiling_schemes()]
+                scheme.tileMatrixSet for scheme in p.get_tiling_schemes()]
             tiles['format'] = metadata_format
             tiles['bounds'] = \
                 self.config['resources'][dataset]['extents']['spatial']['bbox']
@@ -2487,15 +2612,13 @@ class API:
 
             content = render_j2_template(self.config,
                                          'collections/tiles/index.html', tiles,
-                                         SYSTEM_LOCALE)
+                                         request.locale)
 
-            return headers, 200, content
+            return headers, HTTPStatus.OK, content
 
-        return headers, 200, to_json(tiles, self.pretty_print)
+        return headers, HTTPStatus.OK, to_json(tiles, self.pretty_print)
 
-    @gzip
     @pre_process
-    @jsonldify
     def get_collection_tiles_data(
             self, request: Union[APIRequest, Any],
             dataset=None, matrix_id=None,
@@ -2526,7 +2649,7 @@ class API:
         if dataset not in collections.keys():
             msg = 'Collection not found'
             return self.get_exception(
-                404, headers, request.format, 'NotFound', msg)
+                HTTPStatus.NOT_FOUND, headers, request.format, 'NotFound', msg)
 
         LOGGER.debug('Loading tile provider')
         try:
@@ -2537,46 +2660,49 @@ class API:
             format_ = p.format_type
             headers['Content-Type'] = format_
 
-            LOGGER.debug('Fetching tileset id {} and tile {}/{}/{}'.format(
-                matrix_id, z_idx, y_idx, x_idx))
+            LOGGER.debug(f'Fetching tileset id {matrix_id} and tile {z_idx}/{y_idx}/{x_idx}')  # noqa
             content = p.get_tiles(layer=p.get_layer(), tileset=matrix_id,
                                   z=z_idx, y=y_idx, x=x_idx, format_=format_)
             if content is None:
                 msg = 'identifier not found'
                 return self.get_exception(
-                    404, headers, format_, 'NotFound', msg)
+                    HTTPStatus.NOT_FOUND, headers, format_, 'NotFound', msg)
             else:
-                return headers, 202, content
+                return headers, HTTPStatus.ACCEPTED, content
 
         # @TODO: figure out if the spec requires to return json errors
         except KeyError:
             msg = 'Invalid collection tiles'
             return self.get_exception(
-                400, headers, format_, 'InvalidParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, format_,
+                'InvalidParameterValue', msg)
         except ProviderConnectionError as err:
             LOGGER.error(err)
             msg = 'connection error (check logs)'
             return self.get_exception(
-                500, headers, format_, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, format_,
+                'NoApplicableCode', msg)
         except ProviderTilesetIdNotFoundError:
             msg = 'Tileset id not found'
             return self.get_exception(
-                404, headers, format_, 'NotFound', msg)
+                HTTPStatus.NOT_FOUND, headers, format_, 'NotFound', msg)
         except ProviderTileQueryError as err:
             LOGGER.error(err)
             msg = 'Tile not found'
             return self.get_exception(
-                500, headers, format_, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, format_,
+                'NoApplicableCode', msg)
         except ProviderTileNotFoundError as err:
             LOGGER.error(err)
             msg = 'Tile not found (check logs)'
             return self.get_exception(
-                404, headers, format_, 'NoMatch', msg)
+                HTTPStatus.NOT_FOUND, headers, format_, 'NoMatch', msg)
         except ProviderGenericError as err:
             LOGGER.error(err)
             msg = 'Generic error (check logs)'
             return self.get_exception(
-                500, headers, format_, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, format_,
+                'NoApplicableCode', msg)
 
     @gzip
     @pre_process
@@ -2603,7 +2729,7 @@ class API:
 
             msg = 'Collection not found'
             return self.get_exception(
-                404, headers, request.format, 'NotFound', msg)
+                HTTPStatus.NOT_FOUND, headers, request.format, 'NotFound', msg)
 
         LOGGER.debug('Creating collection tiles')
         LOGGER.debug('Loading provider')
@@ -2614,31 +2740,29 @@ class API:
         except KeyError:
             msg = 'Invalid collection tiles'
             return self.get_exception(
-                400, headers, request.format, 'InvalidParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'InvalidParameterValue', msg)
         except ProviderConnectionError:
             msg = 'connection error (check logs)'
             return self.get_exception(
-                500, headers, request.format, 'InvalidParameterValue', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, request.format,
+                'InvalidParameterValue', msg)
         except ProviderQueryError:
             msg = 'query error (check logs)'
             return self.get_exception(
-                500, headers, request.format, 'InvalidParameterValue', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, request.format,
+                'InvalidParameterValue', msg)
 
         # Get provider language (if any)
         prv_locale = l10n.get_plugin_locale(t, request.raw_locale)
 
         if matrix_id not in p.options['schemes']:
             msg = 'tileset not found'
-            return self.get_exception(404, headers, request.format,
-                                      'NotFound', msg)
+            return self.get_exception(HTTPStatus.NOT_FOUND, headers,
+                                      request.format, 'NotFound', msg)
 
-        metadata_format = p.options['metadata_format']
-        tilejson = True if (metadata_format == 'tilejson') else False
-
-        tiles_metadata = p.get_metadata(
-            dataset=dataset, server_url=self.config['server']['url'],
-            layer=p.get_layer(), tileset=matrix_id, tilejson=tilejson,
-            language=prv_locale)
+        metadata_format = TilesMetadataFormat[
+            str(p.options['metadata_format']).upper()]
 
         # Set response language to requested provider locale
         # (if it supports language) and/or otherwise the requested pygeoapi
@@ -2646,21 +2770,293 @@ class API:
         l10n.set_response_language(headers, prv_locale, request.locale)
 
         if request.format == F_HTML:  # render
-            metadata = dict(metadata=tiles_metadata)
+            tiles_metadata = p.get_metadata(
+                dataset=dataset, server_url=self.config['server']['url'],
+                layer=p.get_layer(), tileset=matrix_id,
+                metadata_format=TilesMetadataFormat.TILEJSON,
+                language=prv_locale)
+            metadata = dict()
+            metadata['metadata'] = tiles_metadata
             metadata['id'] = dataset
             metadata['title'] = l10n.translate(
                 self.config['resources'][dataset]['title'], request.locale)
             metadata['tileset'] = matrix_id
-            metadata['format'] = metadata_format
+            metadata['format'] = metadata_format.value
             metadata['collections_path'] = self.get_collections_url()
 
             content = render_j2_template(self.config,
                                          'collections/tiles/metadata.html',
                                          metadata, request.locale)
 
-            return headers, 200, content
+            return headers, HTTPStatus.OK, content
+        else:
+            tiles_metadata = p.get_metadata(
+                dataset=dataset, server_url=self.config['server']['url'],
+                layer=p.get_layer(), tileset=matrix_id,
+                metadata_format=metadata_format, title=l10n.translate(
+                    self.config['resources'][dataset]['title'],
+                    request.locale),
+                description=l10n.translate(
+                    self.config['resources'][dataset]['description'],
+                    request.locale),
+                language=prv_locale)
 
-        return headers, 200, to_json(tiles_metadata, self.pretty_print)
+        return headers, HTTPStatus.OK, tiles_metadata
+
+    @gzip
+    @pre_process
+    def get_collection_map(self, request: Union[APIRequest, Any],
+                           dataset, style=None) -> Tuple[dict, int, str]:
+        """
+        Returns a subset of a collection map
+
+        :param request: A request object
+        :param dataset: dataset name
+        :param style: style name
+
+        :returns: tuple of headers, status code, content
+        """
+
+        if not request.is_valid():
+            return self.get_format_exception(request)
+
+        query_args = {
+            'crs': 'CRS84'
+        }
+
+        format_ = request.format or 'png'
+        headers = request.get_response_headers()
+
+        LOGGER.debug('Processing query parameters')
+
+        LOGGER.debug('Loading provider')
+        try:
+            collection_def = get_provider_by_type(
+                self.config['resources'][dataset]['providers'], 'map')
+
+            p = load_plugin('provider', collection_def)
+        except KeyError:
+            exception = {
+                'code': 'InvalidParameterValue',
+                'description': 'collection does not exist'
+            }
+            headers['Content-type'] = 'application/json'
+            LOGGER.error(exception)
+            return headers, HTTPStatus.NOT_FOUND, to_json(
+                exception, self.pretty_print)
+        except ProviderTypeError:
+            exception = {
+                'code': 'NoApplicableCode',
+                'description': 'invalid provider type'
+            }
+            headers['Content-type'] = 'application/json'
+            LOGGER.error(exception)
+            return headers, HTTPStatus.BAD_REQUEST, to_json(
+                exception, self.pretty_print)
+        except ProviderConnectionError:
+            exception = {
+                'code': 'NoApplicableCode',
+                'description': 'connection error (check logs)'
+            }
+            headers['Content-type'] = 'application/json'
+            LOGGER.error(exception)
+            return headers, HTTPStatus.INTERNAL_SERVER_ERROR, to_json(
+                exception, self.pretty_print)
+
+        query_args['format_'] = request.params.get('f', 'png')
+        query_args['style'] = style
+        query_args['crs'] = request.params.get('bbox-crs', 4326)
+        query_args['transparent'] = request.params.get('transparent', True)
+
+        try:
+            query_args['width'] = int(request.params.get('width', 500))
+            query_args['height'] = int(request.params.get('height', 300))
+        except ValueError:
+            exception = {
+                'code': 'InvalidParameterValue',
+                'description': 'invalid width/height'
+            }
+            headers['Content-type'] = 'application/json'
+            LOGGER.error(exception)
+            return headers, HTTPStatus.BAD_REQUEST, to_json(
+                exception, self.pretty_print)
+
+        LOGGER.debug('Processing bbox parameter')
+        try:
+            bbox = request.params.get('bbox').split(',')
+            if len(bbox) != 4:
+                exception = {
+                    'code': 'InvalidParameterValue',
+                    'description': 'bbox values should be minx,miny,maxx,maxy'
+                }
+                headers['Content-type'] = 'application/json'
+                LOGGER.error(exception)
+                return headers, HTTPStatus.BAD_REQUEST, to_json(
+                    exception, self.pretty_print)
+        except AttributeError:
+            bbox = self.config['resources'][dataset]['extents']['spatial']['bbox']  # noqa
+        try:
+            query_args['bbox'] = [float(c) for c in bbox]
+        except ValueError:
+            exception = {
+                'code': 'InvalidParameterValue',
+                'description': 'bbox values must be numbers'
+            }
+            headers['Content-type'] = 'application/json'
+            LOGGER.error(exception)
+            return headers, HTTPStatus.BAD_REQUEST, to_json(
+                exception, self.pretty_print)
+
+        LOGGER.debug('Processing datetime parameter')
+        datetime_ = request.params.get('datetime')
+        try:
+            query_args['datetime_'] = validate_datetime(
+                self.config['resources'][dataset]['extents'], datetime_)
+        except ValueError as err:
+            msg = str(err)
+            return self.get_exception(
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'InvalidParameterValue', msg)
+
+        LOGGER.debug('Generating map')
+        try:
+            data = p.query(**query_args)
+        except ProviderInvalidQueryError as err:
+            exception = {
+                'code': 'NoApplicableCode',
+                'description': f'query error: {err}'
+            }
+            LOGGER.error(exception)
+            headers['Content-type'] = 'application/json'
+            return headers, HTTPStatus.BAD_REQUEST, to_json(
+                exception, self.pretty_print)
+        except ProviderNoDataError:
+            exception = {
+                'code': 'NoApplicableCode',
+                'description': 'No data found'
+            }
+            LOGGER.debug(exception)
+            headers['Content-type'] = 'application/json'
+            return headers, HTTPStatus.NO_CONTENT, to_json(
+                exception, self.pretty_print)
+        except ProviderQueryError:
+            exception = {
+                'code': 'NoApplicableCode',
+                'description': 'query error (check logs)'
+            }
+            LOGGER.error(exception)
+            headers['Content-type'] = 'application/json'
+            return headers, HTTPStatus.INTERNAL_SERVER_ERROR, to_json(
+                exception, self.pretty_print)
+
+        mt = collection_def['format']['name']
+
+        if format_ == mt:
+            headers['Content-Type'] = collection_def['format']['mimetype']
+            return headers, HTTPStatus.OK, data
+        elif format_ in [None, 'html']:
+            headers['Content-Type'] = collection_def['format']['mimetype']
+            return headers, HTTPStatus.OK, data
+        else:
+            exception = {
+                'code': 'InvalidParameterValue',
+                'description': 'invalid format parameter'
+            }
+            LOGGER.error(exception)
+            return headers, HTTPStatus.BAD_REQUEST, to_json(
+                data, self.pretty_print)
+
+    @gzip
+    def get_collection_map_legend(
+            self, request: Union[APIRequest, Any],
+            dataset, style=None) -> Tuple[dict, int, str]:
+        """
+        Returns a subset of a collection map legend
+
+        :param request: A request object
+        :param dataset: dataset name
+        :param style: style name
+
+        :returns: tuple of headers, status code, content
+        """
+
+        format_ = 'png'
+        headers = request.get_response_headers()
+
+        LOGGER.debug('Processing query parameters')
+
+        LOGGER.debug('Loading provider')
+        try:
+            collection_def = get_provider_by_type(
+                self.config['resources'][dataset]['providers'], 'map')
+
+            p = load_plugin('provider', collection_def)
+        except KeyError:
+            exception = {
+                'code': 'InvalidParameterValue',
+                'description': 'collection does not exist'
+            }
+            LOGGER.error(exception)
+            return headers, HTTPStatus.NOT_FOUND, to_json(
+                exception, self.pretty_print)
+        except ProviderTypeError:
+            exception = {
+                'code': 'NoApplicableCode',
+                'description': 'invalid provider type'
+            }
+            LOGGER.error(exception)
+            return headers, HTTPStatus.BAD_REQUEST, to_json(
+                exception, self.pretty_print)
+        except ProviderConnectionError:
+            exception = {
+                'code': 'NoApplicableCode',
+                'description': 'connection error (check logs)'
+            }
+            LOGGER.error(exception)
+            return headers, HTTPStatus.INTERNAL_SERVER_ERROR, to_json(
+                exception, self.pretty_print)
+
+        LOGGER.debug('Generating legend')
+        try:
+            data = p.get_legend(style, request.params.get('f', 'png'))
+        except ProviderInvalidQueryError as err:
+            exception = {
+                'code': 'NoApplicableCode',
+                'description': f'query error: {err}'
+            }
+            LOGGER.error(exception)
+            return headers, HTTPStatus.BAD_REQUEST, to_json(
+                exception, self.pretty_print)
+        except ProviderNoDataError:
+            exception = {
+                'code': 'NoApplicableCode',
+                'description': 'No data found'
+            }
+            LOGGER.debug(exception)
+            return headers, HTTPStatus.NO_CONTENT, to_json(
+                exception, self.pretty_print)
+        except ProviderQueryError:
+            exception = {
+                'code': 'NoApplicableCode',
+                'description': 'query error (check logs)'
+            }
+            LOGGER.error(exception)
+            return headers, HTTPStatus.INTERNAL_SERVER_ERROR, to_json(
+                exception, self.pretty_print)
+
+        mt = collection_def['format']['name']
+
+        if format_ == mt:
+            headers['Content-Type'] = collection_def['format']['mimetype']
+            return headers, HTTPStatus.OK, data
+        else:
+            exception = {
+                'code': 'InvalidParameterValue',
+                'description': 'invalid format parameter'
+            }
+            LOGGER.error(exception)
+            return headers, HTTPStatus.BAD_REQUEST, to_json(
+                data, self.pretty_print)
 
     @gzip
     @pre_process
@@ -2690,7 +3086,8 @@ class API:
             if process not in processes_config.keys() or not processes_config:
                 msg = 'Identifier not found'
                 return self.get_exception(
-                    404, headers, request.format, 'NoSuchProcess', msg)
+                    HTTPStatus.NOT_FOUND, headers,
+                    request.format, 'NoSuchProcess', msg)
 
         if processes_config:
             if process is not None:
@@ -2717,15 +3114,14 @@ class API:
                 p2['outputTransmission'] = ['value']
                 p2['links'] = p2.get('links', [])
 
-                jobs_url = '{}/jobs'.format(self.config['server']['url'])
-                process_url = '{}/processes/{}'.format(
-                    self.config['server']['url'], key)
+                jobs_url = f"{self.config['server']['url']}/jobs"
+                process_url = f"{self.config['server']['url']}/processes/{key}"
 
                 # TODO translation support
                 link = {
                     'type': FORMAT_TYPES[F_JSON],
                     'rel': request.get_linkrel(F_JSON),
-                    'href': '{}?f={}'.format(process_url, F_JSON),
+                    'href': f'{process_url}?f={F_JSON}',
                     'title': 'Process description as JSON',
                     'hreflang': self.default_locale
                 }
@@ -2734,7 +3130,7 @@ class API:
                 link = {
                     'type': FORMAT_TYPES[F_HTML],
                     'rel': request.get_linkrel(F_HTML),
-                    'href': '{}?f={}'.format(process_url, F_HTML),
+                    'href': f'{process_url}?f={F_HTML}',
                     'title': 'Process description as HTML',
                     'hreflang': self.default_locale
                 }
@@ -2743,7 +3139,7 @@ class API:
                 link = {
                     'type': FORMAT_TYPES[F_HTML],
                     'rel': 'http://www.opengis.net/def/rel/ogc/1.0/job-list',
-                    'href': '{}?f={}'.format(jobs_url, F_HTML),
+                    'href': f'{jobs_url}?f={F_HTML}',
                     'title': 'jobs for this process as HTML',
                     'hreflang': self.default_locale
                 }
@@ -2752,7 +3148,7 @@ class API:
                 link = {
                     'type': FORMAT_TYPES[F_JSON],
                     'rel': 'http://www.opengis.net/def/rel/ogc/1.0/job-list',
-                    'href': '{}?f={}'.format(jobs_url, F_JSON),
+                    'href': f'{jobs_url}?f={F_JSON}',
                     'title': 'jobs for this process as JSON',
                     'hreflang': self.default_locale
                 }
@@ -2761,7 +3157,7 @@ class API:
                 link = {
                     'type': FORMAT_TYPES[F_JSON],
                     'rel': 'http://www.opengis.net/def/rel/ogc/1.0/execute',
-                    'href': '{}/execution?f={}'.format(process_url, F_JSON),
+                    'href': f'{process_url}/execution?f={F_JSON}',
                     'title': 'Execution for this process as JSON',
                     'hreflang': self.default_locale
                 }
@@ -2786,9 +3182,9 @@ class API:
                                               'processes/index.html', response,
                                               request.locale)
 
-            return headers, 200, response
+            return headers, HTTPStatus.OK, response
 
-        return headers, 200, to_json(response, self.pretty_print)
+        return headers, HTTPStatus.OK, to_json(response, self.pretty_print)
 
     @gzip
     @pre_process
@@ -2809,7 +3205,6 @@ class API:
 
         if self.manager:
             if job_id is None:
-                print(self.manager.get_jobs())
                 jobs = sorted(self.manager.get_jobs(),
                               key=lambda k: k['job_start_datetime'],
                               reverse=True)
@@ -2822,12 +3217,12 @@ class API:
         serialized_jobs = {
             'jobs': [],
             'links': [{
-                'href': '{}/jobs?f={}'.format(self.config['server']['url'], F_HTML),  # noqa
+                'href': f"{self.config['server']['url']}/jobs?f={F_HTML}",
                 'rel': request.get_linkrel(F_HTML),
                 'type': FORMAT_TYPES[F_HTML],
                 'title': 'Jobs list as HTML'
             }, {
-                'href': '{}/jobs?f={}'.format(self.config['server']['url'], F_JSON),  # noqa
+                'href': f"{self.config['server']['url']}/jobs?f={F_JSON}",
                 'rel': request.get_linkrel(F_JSON),
                 'type': FORMAT_TYPES[F_JSON],
                 'title': 'Jobs list as JSON'
@@ -2849,19 +3244,18 @@ class API:
             if JobStatus[job_['status']] in (
                JobStatus.successful, JobStatus.running, JobStatus.accepted):
 
-                job_result_url = '{}/jobs/{}/results'.format(
-                    self.config['server']['url'], job_['identifier'])
+                job_result_url = f"{self.config['server']['url']}/jobs/{job_['identifier']}/results"  # noqa
 
                 job2['links'] = [{
-                    'href': '{}?f={}'.format(job_result_url, F_HTML),
+                    'href': f'{job_result_url}?f={F_HTML}',
                     'rel': 'about',
                     'type': FORMAT_TYPES[F_HTML],
-                    'title': 'results of job {} as HTML'.format(job_id)
+                    'title': f'results of job {job_id} as HTML'
                 }, {
-                    'href': '{}?f={}'.format(job_result_url, F_JSON),
+                    'href': f'{job_result_url}?f={F_JSON}',
                     'rel': 'about',
                     'type': FORMAT_TYPES[F_JSON],
-                    'title': 'results of job {} as JSON'.format(job_id)
+                    'title': f'results of job {job_id} as JSON'
                 }]
 
                 if job_['mimetype'] not in (FORMAT_TYPES[F_JSON],
@@ -2870,8 +3264,7 @@ class API:
                         'href': job_result_url,
                         'rel': 'about',
                         'type': job_['mimetype'],
-                        'title': 'results of job {} as {}'.format(
-                            job_id, job_['mimetype'])
+                        'title': f"results of job {job_id} as {job_['mimetype']}"  # noqa
                     })
 
             serialized_jobs['jobs'].append(job2)
@@ -2888,10 +3281,11 @@ class API:
                 'now': datetime.now(timezone.utc).strftime(DATETIME_FORMAT)
             }
             response = render_j2_template(self.config, j2_template, data,
-                                          SYSTEM_LOCALE)
-            return headers, 200, response
+                                          request.locale)
+            return headers, HTTPStatus.OK, response
 
-        return headers, 200, to_json(serialized_jobs, self.pretty_print)
+        return headers, HTTPStatus.OK, to_json(serialized_jobs,
+                                               self.pretty_print)
 
     @gzip
     @pre_process
@@ -2918,12 +3312,14 @@ class API:
         if process_id not in processes_config:
             msg = 'identifier not found'
             return self.get_exception(
-                404, headers, request.format, 'NoSuchProcess', msg)
+                HTTPStatus.NOT_FOUND, headers,
+                request.format, 'NoSuchProcess', msg)
 
         if not self.manager:
             msg = 'Process manager is undefined'
             return self.get_exception(
-                500, headers, request.format, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers,
+                request.format, 'NoApplicableCode', msg)
 
         process = load_plugin('process',
                               processes_config[process_id]['processor'])
@@ -2934,7 +3330,8 @@ class API:
             #      random value generators
             msg = 'missing request data'
             return self.get_exception(
-                400, headers, request.format, 'MissingParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'MissingParameterValue', msg)
 
         try:
             # Parse bytes data, if applicable
@@ -2950,14 +3347,14 @@ class API:
             LOGGER.error(err)
             msg = 'invalid request data'
             return self.get_exception(
-                400, headers, request.format, 'InvalidParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'InvalidParameterValue', msg)
 
         data_dict = data.get('inputs', {})
         LOGGER.debug(data_dict)
 
         job_id = data.get("job_id", str(uuid.uuid1()))
-        url = '{}/jobs/{}'.format(
-            self.config['server']['url'], job_id)
+        url = f"{self.config['server']['url']}/jobs/{job_id}"
 
         headers['Location'] = url
 
@@ -2977,7 +3374,8 @@ class API:
             LOGGER.error(err)
             msg = 'Processing error'
             return self.get_exception(
-                500, headers, request.format, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers,
+                request.format, 'NoApplicableCode', msg)
 
         response = {}
         if status == JobStatus.failed:
@@ -2991,9 +3389,9 @@ class API:
             response['outputs'] = [outputs]
 
         if is_async:
-            http_status = 201
+            http_status = HTTPStatus.CREATED
         else:
-            http_status = 200
+            http_status = HTTPStatus.OK
 
         if mime_type == 'application/json':
             response2 = to_json(response, self.pretty_print)
@@ -3023,26 +3421,29 @@ class API:
 
         if not job:
             msg = 'job not found'
-            return self.get_exception(404, headers, request.format,
-                                      'NoSuchJob', msg)
+            return self.get_exception(HTTPStatus.NOT_FOUND, headers,
+                                      request.format, 'NoSuchJob', msg)
 
         status = JobStatus[job['status']]
 
         if status == JobStatus.running:
             msg = 'job still running'
             return self.get_exception(
-                404, headers, request.format, 'ResultNotReady', msg)
+                HTTPStatus.NOT_FOUND, headers,
+                request.format, 'ResultNotReady', msg)
 
         elif status == JobStatus.accepted:
             # NOTE: this case is not mentioned in the specification
             msg = 'job accepted but not yet running'
             return self.get_exception(
-                404, headers, request.format, 'ResultNotReady', msg)
+                HTTPStatus.NOT_FOUND, headers,
+                request.format, 'ResultNotReady', msg)
 
         elif status == JobStatus.failed:
             msg = 'job failed'
             return self.get_exception(
-                400, headers, request.format, 'InvalidParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'InvalidParameterValue', msg)
 
         mimetype, job_output = self.manager.get_job_result(job_id)
 
@@ -3061,9 +3462,9 @@ class API:
                 }
                 content = render_j2_template(
                     self.config, 'jobs/results/index.html',
-                    data, SYSTEM_LOCALE)
+                    data, request.locale)
 
-        return headers, 200, content
+        return headers, HTTPStatus.OK, content
 
     def delete_job(self, job_id) -> Tuple[dict, int, str]:
         """
@@ -3077,14 +3478,14 @@ class API:
         success = self.manager.delete_job(job_id)
 
         if not success:
-            http_status = 404
+            http_status = HTTPStatus.NOT_FOUND
             response = {
                 'code': 'NoSuchJob',
                 'description': 'Job identifier not found'
             }
         else:
-            http_status = 200
-            jobs_url = '{}/jobs'.format(self.config['server']['url'])
+            http_status = HTTPStatus.OK
+            jobs_url = f"{self.config['server']['url']}/jobs"
 
             response = {
                 'jobID': job_id,
@@ -3129,7 +3530,7 @@ class API:
         if dataset not in collections.keys():
             msg = 'Collection not found'
             return self.get_exception(
-                404, headers, request.format, 'NotFound', msg)
+                HTTPStatus.NOT_FOUND, headers, request.format, 'NotFound', msg)
 
         LOGGER.debug('Processing query parameters')
 
@@ -3141,7 +3542,8 @@ class API:
         except ValueError as err:
             msg = str(err)
             return self.get_exception(
-                400, headers, request.format, 'InvalidParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'InvalidParameterValue', msg)
 
         LOGGER.debug('Processing parameter-name parameter')
         parameternames = request.params.get('parameter-name') or []
@@ -3149,19 +3551,21 @@ class API:
             parameternames = parameternames.split(',')
 
         LOGGER.debug('Processing coords parameter')
-        wkt = request.params.get('coords', None)
+        wkt = request.params.get('coords')
 
         if not wkt:
             msg = 'missing coords parameter'
             return self.get_exception(
-                400, headers, request.format, 'InvalidParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'InvalidParameterValue', msg)
 
         try:
             wkt = shapely_loads(wkt)
         except WKTReadingError:
             msg = 'invalid coords parameter'
             return self.get_exception(
-                400, headers, request.format, 'InvalidParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'InvalidParameterValue', msg)
 
         LOGGER.debug('Processing z parameter')
         z = request.params.get('z')
@@ -3173,31 +3577,37 @@ class API:
         except ProviderTypeError:
             msg = 'invalid provider type'
             return self.get_exception(
-                500, headers, request.format, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers,
+                request.format, 'NoApplicableCode', msg)
         except ProviderConnectionError:
             msg = 'connection error (check logs)'
             return self.get_exception(
-                500, headers, request.format, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers,
+                request.format, 'NoApplicableCode', msg)
         except ProviderQueryError:
             msg = 'query error (check logs)'
             return self.get_exception(
-                500, headers, request.format, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers,
+                request.format, 'NoApplicableCode', msg)
 
         if instance is not None and not p.get_instance(instance):
             msg = 'Invalid instance identifier'
             return self.get_exception(
-                400, headers, request.format, 'InvalidParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers,
+                request.format, 'InvalidParameterValue', msg)
 
         if query_type not in p.get_query_types():
             msg = 'Unsupported query type'
             return self.get_exception(
-                400, headers, request.format, 'InvalidParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'InvalidParameterValue', msg)
 
         if parameternames and not any((fld['id'] in parameternames)
                                       for fld in p.get_fields()['field']):
             msg = 'Invalid parameter-name'
             return self.get_exception(
-                400, headers, request.format, 'InvalidParameterValue', msg)
+                HTTPStatus.BAD_REQUEST, headers, request.format,
+                'InvalidParameterValue', msg)
 
         query_args = dict(
             query_type=query_type,
@@ -3214,11 +3624,12 @@ class API:
         except ProviderNoDataError:
             msg = 'No data found'
             return self.get_exception(
-                204, headers, request.format, 'NoMatch', msg)
+                HTTPStatus.NO_CONTENT, headers, request.format, 'NoMatch', msg)
         except ProviderQueryError:
             msg = 'query error (check logs)'
             return self.get_exception(
-                500, headers, request.format, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers, request.format,
+                'NoApplicableCode', msg)
 
         if request.format == F_HTML:  # render
             content = render_j2_template(self.config,
@@ -3227,7 +3638,7 @@ class API:
         else:
             content = to_json(data, self.pretty_print)
 
-        return headers, 200, content
+        return headers, HTTPStatus.OK, content
 
     @gzip
     @pre_process
@@ -3269,21 +3680,21 @@ class API:
         for key, value in stac_collections.items():
             content['links'].append({
                 'rel': 'child',
-                'href': '{}/{}?f={}'.format(stac_url, key, F_JSON),
+                'href': f'{stac_url}/{key}?f={F_JSON}',
                 'type': FORMAT_TYPES[F_JSON]
             })
             content['links'].append({
                 'rel': 'child',
-                'href': '{}/{}'.format(stac_url, key),
+                'href': f'{stac_url}/{key}',
                 'type': FORMAT_TYPES[F_HTML]
             })
 
         if request.format == F_HTML:  # render
             content = render_j2_template(self.config, 'stac/collection.html',
                                          content, request.locale)
-            return headers, 200, content
+            return headers, HTTPStatus.OK, content
 
-        return headers, 200, to_json(content, self.pretty_print)
+        return headers, HTTPStatus.OK, to_json(content, self.pretty_print)
 
     @gzip
     @pre_process
@@ -3303,7 +3714,7 @@ class API:
         headers = request.get_response_headers()
 
         dataset = None
-        LOGGER.debug('Path: {}'.format(path))
+        LOGGER.debug(f'Path: {path}')
         dir_tokens = path.split('/')
         if dir_tokens:
             dataset = dir_tokens[0]
@@ -3313,8 +3724,8 @@ class API:
 
         if dataset not in stac_collections:
             msg = 'Collection not found'
-            return self.get_exception(404, headers, request.format,
-                                      'NotFound', msg)
+            return self.get_exception(HTTPStatus.NOT_FOUND, headers,
+                                      request.format, 'NotFound', msg)
 
         LOGGER.debug('Loading provider')
         try:
@@ -3324,9 +3735,10 @@ class API:
             LOGGER.error(err)
             msg = 'connection error (check logs)'
             return self.get_exception(
-                500, headers, request.format, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers,
+                request.format, 'NoApplicableCode', msg)
 
-        id_ = '{}-stac'.format(dataset)
+        id_ = f'{dataset}-stac'
         stac_version = '1.0.0-rc.2'
 
         content = {
@@ -3346,13 +3758,14 @@ class API:
         except ProviderNotFoundError as err:
             LOGGER.error(err)
             msg = 'resource not found'
-            return self.get_exception(404, headers, request.format,
-                                      'NotFound', msg)
+            return self.get_exception(HTTPStatus.NOT_FOUND, headers,
+                                      request.format, 'NotFound', msg)
         except Exception as err:
             LOGGER.error(err)
             msg = 'data query error'
             return self.get_exception(
-                500, headers, request.format, 'NoApplicableCode', msg)
+                HTTPStatus.INTERNAL_SERVER_ERROR, headers,
+                request.format, 'NoApplicableCode', msg)
 
         if isinstance(stac_data, dict):
             content.update(stac_data)
@@ -3369,13 +3782,13 @@ class API:
                                                  'stac/catalog.html',
                                                  content, request.locale)
 
-                return headers, 200, content
+                return headers, HTTPStatus.OK, content
 
-            return headers, 200, to_json(content, self.pretty_print)
+            return headers, HTTPStatus.OK, to_json(content, self.pretty_print)
 
         else:  # send back file
             headers.pop('Content-Type', None)
-            return headers, 200, stac_data
+            return headers, HTTPStatus.OK, stac_data
 
     def get_exception(self, status, headers, format_, code,
                       description) -> Tuple[dict, int, str]:
@@ -3419,10 +3832,11 @@ class API:
         headers = request.get_response_headers(SYSTEM_LOCALE)
         msg = f'Invalid format: {request.format}'
         return self.get_exception(
-            400, headers, request.format, 'InvalidParameterValue', msg)
+            HTTPStatus.BAD_REQUEST, headers,
+            request.format, 'InvalidParameterValue', msg)
 
     def get_collections_url(self):
-        return '{}/collections'.format(self.config['server']['url'])
+        return f"{self.config['server']['url']}/collections"
 
 
 def validate_bbox(value=None) -> list:
@@ -3563,7 +3977,7 @@ def validate_subset(value: str) -> dict:
     subsets = {}
 
     for s in value.split(','):
-        LOGGER.debug('Processing subset {}'.format(s))
+        LOGGER.debug(f'Processing subset {s}')
         m = re.search(r'(.*)\((.*)\)', s)
         subset_name, values = m.group(1, 2)
 

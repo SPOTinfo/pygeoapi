@@ -29,8 +29,16 @@
 
 import json
 import logging
+from enum import Enum
 
 LOGGER = logging.getLogger(__name__)
+
+
+class SchemaType(Enum):
+    item = 'item'
+    create = 'create'
+    update = 'update'
+    replace = 'replace'
 
 
 class BaseProvider:
@@ -53,11 +61,11 @@ class BaseProvider:
             raise RuntimeError('name/type/data are required')
 
         self.editable = provider_def.get('editable', False)
-        self.options = provider_def.get('options', None)
-        self.id_field = provider_def.get('id_field', None)
-        self.uri_field = provider_def.get('uri_field', None)
-        self.x_field = provider_def.get('x_field', None)
-        self.y_field = provider_def.get('y_field', None)
+        self.options = provider_def.get('options')
+        self.id_field = provider_def.get('id_field')
+        self.uri_field = provider_def.get('uri_field')
+        self.x_field = provider_def.get('x_field')
+        self.y_field = provider_def.get('y_field')
         self.time_field = provider_def.get('time_field')
         self.title_field = provider_def.get('title_field')
         self.properties = provider_def.get('properties', [])
@@ -75,6 +83,18 @@ class BaseProvider:
         Get provider field information (names, types)
 
         :returns: dict of fields
+        """
+
+        raise NotImplementedError()
+
+    def get_schema(self, schema_type: SchemaType = SchemaType.item):
+        """
+        Get provider schema model
+
+        :param schema_type: `SchemaType` of schema (default is 'item')
+
+        :returns: tuple pair of `str` of media type and `dict` of schema
+                  (i.e. JSON Schema)
         """
 
         raise NotImplementedError()
@@ -192,7 +212,7 @@ class BaseProvider:
         msg = None
 
         LOGGER.debug('Loading data')
-        LOGGER.debug('Data: {}'.format(item))
+        LOGGER.debug(f'Data: {item}')
         try:
             json_data = json.loads(item)
         except TypeError as err:
@@ -242,7 +262,7 @@ class BaseProvider:
         return identifier2, json_data
 
     def __repr__(self):
-        return '<BaseProvider> {}'.format(self.type)
+        return f'<BaseProvider> {self.type}'
 
 
 class ProviderGenericError(Exception):

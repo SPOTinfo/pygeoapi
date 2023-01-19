@@ -24,7 +24,7 @@ parameters.
    GeoJSON,✅/✅,results/hits,❌,❌,❌,✅,❌,❌
    MongoDB,✅/❌,results,✅,✅,✅,✅,❌,❌
    OGR,✅/❌,results/hits,✅,❌,❌,✅,❌,❌
-   PostgreSQL,✅/✅,results/hits,✅,❌,✅,✅,❌,❌
+   PostgreSQL,✅/✅,results/hits,✅,✅,✅,✅,✅,❌
    SQLiteGPKG,✅/❌,results/hits,✅,❌,❌,✅,❌,❌
    SensorThingsAPI,✅/✅,results/hits,✅,✅,✅,✅,❌,❌
    Socrata,✅/✅,results/hits,✅,✅,✅,✅,❌,❌
@@ -73,6 +73,9 @@ Elasticsearch
 ^^^^^^^^^^^^^
 
 .. note::
+   Requires Python packages elasticsearch and elasticsearch-dsl
+
+.. note::
    Elasticsearch 7 or greater is supported.
 
 
@@ -94,7 +97,7 @@ To publish an Elasticsearch index, the following are required in your index:
 This provider has the support for the CQL queries as indicated in the table above.
 
 .. seealso::
-  :ref:`cql` for more details on how to use the Common Query Language to filter the collection with specific queries.
+  :ref:`cql` for more details on how to use Common Query Language (CQL) to filter the collection with specific queries.
 
 
 ESRI Feature Service
@@ -123,6 +126,9 @@ specify the URL for the service layer in the ``data`` field.
 
 OGR
 ^^^
+
+.. note::
+   Requires Python package gdal
 
 `GDAL/OGR <https://gdal.org>`_ supports a wide range of spatial file formats, such as shapefile, dxf, gpx, kml,  
 but also services such as WFS. Read the full list and configuration options at https://gdal.org/drivers/vector.
@@ -196,6 +202,9 @@ MongoDB
 ^^^^^^^
 
 .. note::
+   Requires Python package pymongo
+
+.. note::
    Mongo 5 or greater is supported.
 
 * each document must be a GeoJSON Feature, with a valid geometry.
@@ -209,12 +218,18 @@ MongoDB
          collection: testplaces
 
 
+.. _PostgreSQL:
+
 PostgreSQL
 ^^^^^^^^^^
 
+.. note::
+   Requires Python packages sqlalchemy, geoalchemy2 and psycopg2-binary
+
 Must have PostGIS installed. 
 
-.. todo:: add overview and requirements
+.. note:: 
+   Geometry must be using EPSG:4326
 
 .. code-block:: yaml
 
@@ -232,11 +247,16 @@ Must have PostGIS installed.
          table: hotosm_bdi_waterways
          geom_field: foo_geom
 
+This provider has support for the CQL queries as indicated in the Provider table above.
+
+.. seealso::
+  :ref:`cql` for more details on how to use Common Query Language (CQL) to filter the collection with specific queries.
 
 SQLiteGPKG
 ^^^^^^^^^^
 
-.. todo:: add overview and requirements
+.. note::
+   Requries Spatialite installation
 
 SQLite file:
 

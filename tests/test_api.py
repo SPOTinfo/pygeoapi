@@ -1,8 +1,11 @@
 # =================================================================
 #
 # Authors: Tom Kralidis <tomkralidis@gmail.com>
+#          John A Stevenson <jostev@bgs.ac.uk>
+#          Colin Blackburn <colb@bgs.ac.uk>
 #
 # Copyright (c) 2022 Tom Kralidis
+# Copyright (c) 2022 John A Stevenson and Colin Blackburn
 #
 # Permission is hereby granted, free of charge, to any person
 # obtaining a copy of this software and associated documentation
@@ -31,6 +34,7 @@ import json
 import logging
 import time
 import gzip
+from http import HTTPStatus
 
 from pyld import jsonld
 import pytest
@@ -72,6 +76,14 @@ def api_(config):
 @pytest.fixture()
 def api_hidden_resources(config_hidden_resources):
     return API(config_hidden_resources)
+
+
+# API using PostgreSQL provider
+@pytest.fixture()
+def pg_api_():
+    with open(get_test_file_path('pygeoapi-test-config-postgresql.yml')) as fh:
+        config = yaml_load(fh)
+        return API(config)
 
 
 def test_apirequest(api_):
@@ -245,7 +257,7 @@ def test_api(config, api_, openapi):
     req = mock_request({'f': 'foo'})
     rsp_headers, code, response = api_.openapi(req, openapi)
     assert rsp_headers['Content-Language'] == 'en-US'
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     assert api_.get_collections_url() == 'http://localhost:5000/collections'
 
@@ -254,13 +266,13 @@ def test_api_exception(config, api_):
     req = mock_request({'f': 'foo'})
     rsp_headers, code, response = api_.landing_page(req)
     assert rsp_headers['Content-Language'] == 'en-US'
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     # When a language is set, the exception should still be English
     req = mock_request({'f': 'foo', 'lang': 'fr'})
     rsp_headers, code, response = api_.landing_page(req)
     assert rsp_headers['Content-Language'] == 'en-US'
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
 
 def test_gzip(config, api_):
@@ -427,11 +439,11 @@ def test_conformance(config, api_):
 
     assert isinstance(root, dict)
     assert 'conformsTo' in root
-    assert len(root['conformsTo']) == 21
+    assert len(root['conformsTo']) == 22
 
     req = mock_request({'f': 'foo'})
     rsp_headers, code, response = api_.conformance(req)
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     req = mock_request({'f': 'html'})
     rsp_headers, code, response = api_.conformance(req)
@@ -443,7 +455,7 @@ def test_conformance(config, api_):
 def test_describe_collections(config, api_):
     req = mock_request({"f": "foo"})
     rsp_headers, code, response = api_.describe_collections(req)
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     req = mock_request({"f": "html"})
     rsp_headers, code, response = api_.describe_collections(req)
@@ -454,12 +466,12 @@ def test_describe_collections(config, api_):
     collections = json.loads(response)
 
     assert len(collections) == 2
-    assert len(collections['collections']) == 6
+    assert len(collections['collections']) == 7
     assert len(collections['links']) == 3
 
     rsp_headers, code, response = api_.describe_collections(req, 'foo')
     collection = json.loads(response)
-    assert code == 404
+    assert code == HTTPStatus.NOT_FOUND
 
     rsp_headers, code, response = api_.describe_collections(req, 'obs')
     collection = json.loads(response)
@@ -516,7 +528,7 @@ def test_describe_collections_hidden_resources(
         config_hidden_resources, api_hidden_resources):
     req = mock_request({})
     rsp_headers, code, response = api_hidden_resources.describe_collections(req)  # noqa
-    assert code == 200
+    assert code == HTTPStatus.OK
 
     assert len(config_hidden_resources['resources']) == 3
 
@@ -528,7 +540,7 @@ def test_get_collection_queryables(config, api_):
     req = mock_request()
     rsp_headers, code, response = api_.get_collection_queryables(req,
                                                                  'notfound')
-    assert code == 404
+    assert code == HTTPStatus.NOT_FOUND
 
     req = mock_request({'f': 'html'})
     rsp_headers, code, response = api_.get_collection_queryables(req, 'obs')
@@ -596,24 +608,24 @@ def test_get_collection_items(config, api_):
     req = mock_request()
     rsp_headers, code, response = api_.get_collection_items(req, 'foo')
     features = json.loads(response)
-    assert code == 404
+    assert code == HTTPStatus.NOT_FOUND
 
     req = mock_request({'f': 'foo'})
     rsp_headers, code, response = api_.get_collection_items(req, 'obs')
     features = json.loads(response)
 
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     req = mock_request({'bbox': '1,2,3'})
     rsp_headers, code, response = api_.get_collection_items(req, 'obs')
     features = json.loads(response)
 
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     req = mock_request({'bbox': '1,2,3,4c'})
     rsp_headers, code, response = api_.get_collection_items(req, 'obs')
 
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     req = mock_request({'f': 'html', 'lang': 'fr'})
     rsp_headers, code, response = api_.get_collection_items(req, 'obs')
@@ -639,7 +651,7 @@ def test_get_collection_items(config, api_):
     rsp_headers, code, response = api_.get_collection_items(req, 'obs')
     features = json.loads(response)
 
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     req = mock_request({'stn_id': '35'})
     rsp_headers, code, response = api_.get_collection_items(req, 'obs')
@@ -680,7 +692,7 @@ def test_get_collection_items(config, api_):
     rsp_headers, code, response = api_.get_collection_items(req, 'obs')
     features = json.loads(response)
 
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     req = mock_request({'offset': 2})
     rsp_headers, code, response = api_.get_collection_items(req, 'obs')
@@ -738,22 +750,22 @@ def test_get_collection_items(config, api_):
     })
     rsp_headers, code, response = api_.get_collection_items(req, 'obs')
 
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     req = mock_request({'sortby': 'stn_id'})
     rsp_headers, code, response = api_.get_collection_items(req, 'obs')
     features = json.loads(response)
-    assert code == 200
+    assert code == HTTPStatus.OK
 
     req = mock_request({'sortby': '+stn_id'})
     rsp_headers, code, response = api_.get_collection_items(req, 'obs')
     features = json.loads(response)
-    assert code == 200
+    assert code == HTTPStatus.OK
 
     req = mock_request({'sortby': '-stn_id'})
     rsp_headers, code, response = api_.get_collection_items(req, 'obs')
     features = json.loads(response)
-    assert code == 200
+    assert code == HTTPStatus.OK
 
     req = mock_request({'f': 'csv'})
     rsp_headers, code, response = api_.get_collection_items(req, 'obs')
@@ -763,49 +775,49 @@ def test_get_collection_items(config, api_):
     req = mock_request({'datetime': '2003'})
     rsp_headers, code, response = api_.get_collection_items(req, 'obs')
 
-    assert code == 200
+    assert code == HTTPStatus.OK
 
     req = mock_request({'datetime': '1999'})
     rsp_headers, code, response = api_.get_collection_items(req, 'obs')
 
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     req = mock_request({'datetime': '2010-04-22'})
     rsp_headers, code, response = api_.get_collection_items(req, 'obs')
 
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     req = mock_request({'datetime': '2001-11-11/2003-12-18'})
     rsp_headers, code, response = api_.get_collection_items(req, 'obs')
 
-    assert code == 200
+    assert code == HTTPStatus.OK
 
     req = mock_request({'datetime': '../2003-12-18'})
     rsp_headers, code, response = api_.get_collection_items(req, 'obs')
 
-    assert code == 200
+    assert code == HTTPStatus.OK
 
     req = mock_request({'datetime': '2001-11-11/..'})
     rsp_headers, code, response = api_.get_collection_items(req, 'obs')
 
-    assert code == 200
+    assert code == HTTPStatus.OK
 
     req = mock_request({'datetime': '1999/2005-04-22'})
     rsp_headers, code, response = api_.get_collection_items(req, 'obs')
 
-    assert code == 200
+    assert code == HTTPStatus.OK
 
     req = mock_request({'datetime': '1999/2000-04-22'})
     rsp_headers, code, response = api_.get_collection_items(req, 'obs')
 
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     api_.config['resources']['obs']['extents'].pop('temporal')
 
     req = mock_request({'datetime': '2002/2014-04-22'})
     rsp_headers, code, response = api_.get_collection_items(req, 'obs')
 
-    assert code == 200
+    assert code == HTTPStatus.OK
 
     req = mock_request({'scalerank': 1})
     rsp_headers, code, response = api_.get_collection_items(
@@ -820,7 +832,7 @@ def test_get_collection_items(config, api_):
     rsp_headers, code, response = api_.get_collection_items(
         req, 'naturalearth/lakes')
 
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     req = mock_request({'skipGeometry': 'true'})
     rsp_headers, code, response = api_.get_collection_items(req, 'obs')
@@ -830,7 +842,181 @@ def test_get_collection_items(config, api_):
     req = mock_request({'properties': 'foo,bar'})
     rsp_headers, code, response = api_.get_collection_items(req, 'obs')
 
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
+
+
+def test_get_collection_items_postgresql_cql(pg_api_):
+    """
+    Test for PostgreSQL CQL - requires local PostgreSQL with appropriate
+    data.  See pygeoapi/provider/postgresql.py for details.
+    """
+    # Arrange
+    cql_query = 'osm_id BETWEEN 80800000 AND 80900000 AND name IS NULL'
+    expected_ids = [80835474, 80835483]
+
+    # Act
+    req = mock_request({
+        'filter-lang': 'cql-text',
+        'filter': cql_query
+    })
+    rsp_headers, code, response = pg_api_.get_collection_items(
+        req, 'hot_osm_waterways')
+
+    # Assert
+    assert code == HTTPStatus.OK
+    features = json.loads(response)
+    ids = [item['id'] for item in features['features']]
+    assert ids == expected_ids
+
+    # Act, no filter-lang
+    req = mock_request({
+        'filter': cql_query
+    })
+    rsp_headers, code, response = pg_api_.get_collection_items(
+        req, 'hot_osm_waterways')
+
+    # Assert
+    assert code == HTTPStatus.OK
+    features = json.loads(response)
+    ids = [item['id'] for item in features['features']]
+    assert ids == expected_ids
+
+
+def test_get_collection_items_postgresql_cql_invalid_filter_language(pg_api_):
+    """
+    Test for PostgreSQL CQL - requires local PostgreSQL with appropriate
+    data.  See pygeoapi/provider/postgresql.py for details.
+
+    Test for invalid filter language
+    """
+    # Arrange
+    cql_query = 'osm_id BETWEEN 80800000 AND 80900000 AND name IS NULL'
+
+    # Act
+    req = mock_request({
+        'filter-lang': 'cql-json',  # Only cql-text is valid for GET
+        'filter': cql_query
+    })
+    rsp_headers, code, response = pg_api_.get_collection_items(
+        req, 'hot_osm_waterways')
+
+    # Assert
+    assert code == HTTPStatus.BAD_REQUEST
+    error_response = json.loads(response)
+    assert error_response['code'] == 'InvalidParameterValue'
+    assert error_response['description'] == 'Invalid filter language'
+
+
+@pytest.mark.parametrize("bad_cql", [
+    'id IN (1, ~)',
+    'id EATS (1, 2)',  # Valid CQL relations only
+    'id IN (1, 2'  # At some point this may return UnexpectedEOF
+])
+def test_get_collection_items_postgresql_cql_bad_cql(pg_api_, bad_cql):
+    """
+    Test for PostgreSQL CQL - requires local PostgreSQL with appropriate
+    data.  See pygeoapi/provider/postgresql.py for details.
+
+    Test for bad cql
+    """
+    # Act
+    req = mock_request({
+        'filter': bad_cql
+    })
+    rsp_headers, code, response = pg_api_.get_collection_items(
+        req, 'hot_osm_waterways')
+
+    # Assert
+    assert code == HTTPStatus.BAD_REQUEST
+    error_response = json.loads(response)
+    assert error_response['code'] == 'InvalidParameterValue'
+    assert error_response['description'] == f'Bad CQL string : {bad_cql}'
+
+
+def test_post_collection_items_postgresql_cql(pg_api_):
+    """
+    Test for PostgreSQL CQL - requires local PostgreSQL with appropriate
+    data.  See pygeoapi/provider/postgresql.py for details.
+    """
+    # Arrange
+    cql = {"and": [{"between": {"value": {"property": "osm_id"},
+                                "lower": 80800000,
+                                "upper": 80900000}},
+                   {"isNull": {"property": "name"}}]}
+    # werkzeug requests use a value of CONTENT_TYPE 'application/json'
+    # to create Content-Type in the Request object. So here we need to
+    # overwrite the default CONTENT_TYPE with the required one.
+    headers = {'CONTENT_TYPE': 'application/query-cql-json'}
+    expected_ids = [80835474, 80835483]
+
+    # Act
+    req = mock_request({
+        'filter-lang': 'cql-json'
+    }, data=cql, **headers)
+    rsp_headers, code, response = pg_api_.post_collection_items(
+        req, 'hot_osm_waterways')
+
+    # Assert
+    assert code == HTTPStatus.OK
+    features = json.loads(response)
+    ids = [item['id'] for item in features['features']]
+    assert ids == expected_ids
+
+
+def test_post_collection_items_postgresql_cql_invalid_filter_language(pg_api_):
+    """
+    Test for PostgreSQL CQL - requires local PostgreSQL with appropriate
+    data.  See pygeoapi/provider/postgresql.py for details.
+
+    Test for invalid filter language
+    """
+    # Arrange
+    # CQL should never be parsed
+    cql = {"in": {"value": {"property": "id"}, "list": [1, 2]}}
+    headers = {'CONTENT_TYPE': 'application/query-cql-json'}
+
+    # Act
+    req = mock_request({
+        'filter-lang': 'cql-text'  # Only cql-json is valid for POST
+    }, data=cql, **headers)
+    rsp_headers, code, response = pg_api_.post_collection_items(
+        req, 'hot_osm_waterways')
+
+    # Assert
+    assert code == HTTPStatus.BAD_REQUEST
+    error_response = json.loads(response)
+    assert error_response['code'] == 'InvalidParameterValue'
+    assert error_response['description'] == 'Invalid filter language'
+
+
+@pytest.mark.parametrize("bad_cql", [
+    # Valid CQL relations only
+    {"eats": {"value": {"property": "id"}, "list": [1, 2]}},
+    # At some point this may return UnexpectedEOF
+    '{"in": {"value": {"property": "id"}, "list": [1, 2}}'
+])
+def test_post_collection_items_postgresql_cql_bad_cql(pg_api_, bad_cql):
+    """
+    Test for PostgreSQL CQL - requires local PostgreSQL with appropriate
+    data.  See pygeoapi/provider/postgresql.py for details.
+
+    Test for bad cql
+    """
+    # Arrange
+    headers = {'CONTENT_TYPE': 'application/query-cql-json'}
+
+    # Act
+    req = mock_request({
+        'filter-lang': 'cql-json'
+    }, data=bad_cql, **headers)
+    rsp_headers, code, response = pg_api_.post_collection_items(
+        req, 'hot_osm_waterways')
+
+    # Assert
+    assert code == HTTPStatus.BAD_REQUEST
+    error_response = json.loads(response)
+    assert error_response['code'] == 'InvalidParameterValue'
+    assert error_response['description'].startswith('Bad CQL string')
 
 
 def test_get_collection_items_json_ld(config, api_):
@@ -859,23 +1045,23 @@ def test_get_collection_item(config, api_):
     req = mock_request({'f': 'foo'})
     rsp_headers, code, response = api_.get_collection_item(req, 'obs', '371')
 
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     req = mock_request({'f': 'json'})
     rsp_headers, code, response = api_.get_collection_item(
         req, 'gdps-temperature', '371')
 
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     req = mock_request()
     rsp_headers, code, response = api_.get_collection_item(req, 'foo', '371')
 
-    assert code == 404
+    assert code == HTTPStatus.NOT_FOUND
 
     rsp_headers, code, response = api_.get_collection_item(
         req, 'obs', 'notfound')
 
-    assert code == 404
+    assert code == HTTPStatus.NOT_FOUND
 
     req = mock_request({'f': 'html'})
     rsp_headers, code, response = api_.get_collection_item(req, 'obs', '371')
@@ -985,7 +1171,7 @@ def test_get_coverage_domainset(config, api_):
     rsp_headers, code, response = api_.get_collection_coverage_domainset(
         req, 'obs')
 
-    assert code == 500
+    assert code == HTTPStatus.INTERNAL_SERVER_ERROR
 
     rsp_headers, code, response = api_.get_collection_coverage_domainset(
         req, 'gdps-temperature')
@@ -1004,7 +1190,7 @@ def test_get_collection_coverage_rangetype(config, api_):
     rsp_headers, code, response = api_.get_collection_coverage_rangetype(
         req, 'obs')
 
-    assert code == 500
+    assert code == HTTPStatus.INTERNAL_SERVER_ERROR
 
     rsp_headers, code, response = api_.get_collection_coverage_rangetype(
         req, 'gdps-temperature')
@@ -1023,45 +1209,45 @@ def test_get_collection_coverage(config, api_):
     rsp_headers, code, response = api_.get_collection_coverage(
         req, 'obs')
 
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     req = mock_request({'properties': '12'})
     rsp_headers, code, response = api_.get_collection_coverage(
         req, 'gdps-temperature')
 
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     req = mock_request({'subset': 'bad_axis(10:20)'})
     rsp_headers, code, response = api_.get_collection_coverage(
         req, 'gdps-temperature')
 
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     req = mock_request({'f': 'blah'})
     rsp_headers, code, response = api_.get_collection_coverage(
         req, 'gdps-temperature')
 
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     req = mock_request({'f': 'html'})
     rsp_headers, code, response = api_.get_collection_coverage(
         req, 'gdps-temperature')
 
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
     assert rsp_headers['Content-Type'] == 'text/html'
 
     req = mock_request(HTTP_ACCEPT='text/html')
     rsp_headers, code, response = api_.get_collection_coverage(
         req, 'gdps-temperature')
 
-    assert code == 200
+    assert code == HTTPStatus.OK
     assert rsp_headers['Content-Type'] == 'application/prs.coverage+json'
 
     req = mock_request({'subset': 'Lat(5:10),Long(5:10)'})
     rsp_headers, code, response = api_.get_collection_coverage(
         req, 'gdps-temperature')
 
-    assert code == 200
+    assert code == HTTPStatus.OK
     content = json.loads(response)
 
     assert content['domain']['axes']['x']['num'] == 35
@@ -1074,7 +1260,7 @@ def test_get_collection_coverage(config, api_):
     rsp_headers, code, response = api_.get_collection_coverage(
         req, 'gdps-temperature')
 
-    assert code == 200
+    assert code == HTTPStatus.OK
     content = json.loads(response)
 
     assert content['domain']['axes']['x']['start'] == -79.0
@@ -1089,7 +1275,7 @@ def test_get_collection_coverage(config, api_):
     rsp_headers, code, response = api_.get_collection_coverage(
         req, 'gdps-temperature')
 
-    assert code == 200
+    assert code == HTTPStatus.OK
     assert isinstance(response, bytes)
 
     # req = mock_request({
@@ -1097,28 +1283,41 @@ def test_get_collection_coverage(config, api_):
     # })
     # rsp_headers, code, response = api_.get_collection_coverage(req, 'cmip5')
     #
-    # assert code == 200
+    # assert code == HTTPStatus.OK
     # assert isinstance(json.loads(response), dict)
 
     # req = mock_request({'subset': 'lat(1:2'})
     # rsp_headers, code, response = api_.get_collection_coverage(req, 'cmip5')
     #
-    # assert code == 400
+    # assert code == HTTPStatus.BAD_REQUEST
     #
     # req = mock_request({'subset': 'lat(1:2)'})
     # rsp_headers, code, response = api_.get_collection_coverage(req, 'cmip5')
     #
-    # assert code == 204
+    # assert code == HTTPStatus.NO_CONTENT
+
+
+def test_get_collection_map(config, api_):
+    req = mock_request()
+    rsp_headers, code, response = api_.get_collection_map(req, 'notfound')
+    assert code == HTTPStatus.NOT_FOUND
+
+    req = mock_request()
+    rsp_headers, code, response = api_.get_collection_map(
+        req, 'mapserver_world_map')
+    assert code == HTTPStatus.OK
+    assert isinstance(response, bytes)
+    assert response[1:4] == b'PNG'
 
 
 def test_get_collection_tiles(config, api_):
     req = mock_request()
     rsp_headers, code, response = api_.get_collection_tiles(req, 'obs')
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     rsp_headers, code, response = api_.get_collection_tiles(
         req, 'naturalearth/lakes')
-    assert code == 200
+    assert code == HTTPStatus.OK
 
     # Language settings should be ignored (return system default)
     req = mock_request({'lang': 'fr'})
@@ -1136,19 +1335,19 @@ def test_describe_processes(config, api_):
     # Test for undefined process
     rsp_headers, code, response = api_.describe_processes(req, 'foo')
     data = json.loads(response)
-    assert code == 404
+    assert code == HTTPStatus.NOT_FOUND
     assert data['code'] == 'NoSuchProcess'
 
     # Test for description of all processes
     rsp_headers, code, response = api_.describe_processes(req)
     data = json.loads(response)
-    assert code == 200
+    assert code == HTTPStatus.OK
     assert len(data['processes']) == 1
 
     # Test for particular, defined process
     rsp_headers, code, response = api_.describe_processes(req, 'hello-world')
     process = json.loads(response)
-    assert code == 200
+    assert code == HTTPStatus.OK
     assert rsp_headers['Content-Type'] == FORMAT_TYPES[F_JSON]
     assert process['id'] == 'hello-world'
     assert process['version'] == '0.2.0'
@@ -1165,7 +1364,7 @@ def test_describe_processes(config, api_):
     # Check HTML response when requested in headers
     req = mock_request(HTTP_ACCEPT='text/html')
     rsp_headers, code, response = api_.describe_processes(req, 'hello-world')
-    assert code == 200
+    assert code == HTTPStatus.OK
     assert rsp_headers['Content-Type'] == FORMAT_TYPES[F_HTML]
     # No language requested: return default from YAML
     assert rsp_headers['Content-Language'] == 'en-US'
@@ -1173,14 +1372,14 @@ def test_describe_processes(config, api_):
     # Check JSON response when requested in headers
     req = mock_request(HTTP_ACCEPT='application/json')
     rsp_headers, code, response = api_.describe_processes(req, 'hello-world')
-    assert code == 200
+    assert code == HTTPStatus.OK
     assert rsp_headers['Content-Type'] == FORMAT_TYPES[F_JSON]
     assert rsp_headers['Content-Language'] == 'en-US'
 
     # Check HTML response when requested with query parameter
     req = mock_request({'f': 'html'})
     rsp_headers, code, response = api_.describe_processes(req, 'hello-world')
-    assert code == 200
+    assert code == HTTPStatus.OK
     assert rsp_headers['Content-Type'] == FORMAT_TYPES[F_HTML]
     # No language requested: return default from YAML
     assert rsp_headers['Content-Language'] == 'en-US'
@@ -1188,14 +1387,14 @@ def test_describe_processes(config, api_):
     # Check JSON response when requested with query parameter
     req = mock_request({'f': 'json'})
     rsp_headers, code, response = api_.describe_processes(req, 'hello-world')
-    assert code == 200
+    assert code == HTTPStatus.OK
     assert rsp_headers['Content-Type'] == FORMAT_TYPES[F_JSON]
     assert rsp_headers['Content-Language'] == 'en-US'
 
     # Check JSON response when requested with French language parameter
     req = mock_request({'lang': 'fr'})
     rsp_headers, code, response = api_.describe_processes(req, 'hello-world')
-    assert code == 200
+    assert code == HTTPStatus.OK
     assert rsp_headers['Content-Type'] == FORMAT_TYPES[F_JSON]
     assert rsp_headers['Content-Language'] == 'fr-CA'
     process = json.loads(response)
@@ -1204,7 +1403,7 @@ def test_describe_processes(config, api_):
     # Check JSON response when language requested in headers
     req = mock_request(HTTP_ACCEPT_LANGUAGE='fr')
     rsp_headers, code, response = api_.describe_processes(req, 'hello-world')
-    assert code == 200
+    assert code == HTTPStatus.OK
     assert rsp_headers['Content-Type'] == FORMAT_TYPES[F_JSON]
     assert rsp_headers['Content-Language'] == 'fr-CA'
 
@@ -1212,7 +1411,7 @@ def test_describe_processes(config, api_):
     req = mock_request()
     rsp_headers, code, response = api_.describe_processes(req, 'goodbye-world')
     data = json.loads(response)
-    assert code == 404
+    assert code == HTTPStatus.NOT_FOUND
     assert data['code'] == 'NoSuchProcess'
     assert rsp_headers['Content-Type'] == FORMAT_TYPES[F_JSON]
 
@@ -1262,7 +1461,7 @@ def test_execute_process(config, api_):
     assert rsp_headers['Content-Language'] == 'en-US'
 
     data = json.loads(response)
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
     assert 'Location' not in rsp_headers
     assert data['code'] == 'MissingParameterValue'
 
@@ -1270,14 +1469,14 @@ def test_execute_process(config, api_):
     rsp_headers, code, response = api_.execute_process(req, 'foo')
 
     data = json.loads(response)
-    assert code == 404
+    assert code == HTTPStatus.NOT_FOUND
     assert 'Location' not in rsp_headers
     assert data['code'] == 'NoSuchProcess'
 
     rsp_headers, code, response = api_.execute_process(req, 'hello-world')
 
     data = json.loads(response)
-    assert code == 200
+    assert code == HTTPStatus.OK
     assert 'Location' in rsp_headers
 
     assert len(data.keys()) == 2
@@ -1291,7 +1490,7 @@ def test_execute_process(config, api_):
     rsp_headers, code, response = api_.execute_process(req, 'hello-world')
 
     data = json.loads(response)
-    assert code == 200
+    assert code == HTTPStatus.OK
     assert 'Location' in rsp_headers
 
     assert len(data.keys()) == 1
@@ -1305,7 +1504,7 @@ def test_execute_process(config, api_):
     rsp_headers, code, response = api_.execute_process(req, 'hello-world')
 
     data = json.loads(response)
-    assert code == 200
+    assert code == HTTPStatus.OK
     assert 'Location' in rsp_headers
     assert data['value'] == 'Hello Tést!'
 
@@ -1316,7 +1515,7 @@ def test_execute_process(config, api_):
     rsp_headers, code, response = api_.execute_process(req, 'hello-world')
 
     data = json.loads(response)
-    assert code == 200
+    assert code == HTTPStatus.OK
     assert 'Location' in rsp_headers
     assert data['value'] == 'Hello Tést! This is a test.'
 
@@ -1327,7 +1526,7 @@ def test_execute_process(config, api_):
     rsp_headers, code, response = api_.execute_process(req, 'hello-world')
 
     data = json.loads(response)
-    assert code == 200
+    assert code == HTTPStatus.OK
     assert 'Location' in rsp_headers
     assert data['code'] == 'InvalidParameterValue'
     cleanup_jobs.add(tuple(['hello-world',
@@ -1336,7 +1535,7 @@ def test_execute_process(config, api_):
     req = mock_request(data=req_body_5)
     rsp_headers, code, response = api_.execute_process(req, 'hello-world')
     data = json.loads(response)
-    assert code == 200
+    assert code == HTTPStatus.OK
     assert 'Location' in rsp_headers
     assert data['code'] == 'InvalidParameterValue'
     assert data['description'] == 'Error updating job'
@@ -1348,7 +1547,7 @@ def test_execute_process(config, api_):
     rsp_headers, code, response = api_.execute_process(req, 'hello-world')
 
     data = json.loads(response)
-    assert code == 200
+    assert code == HTTPStatus.OK
     assert 'Location' in rsp_headers
     assert data['code'] == 'InvalidParameterValue'
     assert data['description'] == 'Error updating job'
@@ -1360,14 +1559,14 @@ def test_execute_process(config, api_):
     rsp_headers, code, response = api_.execute_process(req, 'goodbye-world')
 
     response = json.loads(response)
-    assert code == 404
+    assert code == HTTPStatus.NOT_FOUND
     assert 'Location' not in rsp_headers
     assert response['code'] == 'NoSuchProcess'
 
     rsp_headers, code, response = api_.execute_process(req, 'hello-world')
 
     response = json.loads(response)
-    assert code == 200
+    assert code == HTTPStatus.OK
 
     cleanup_jobs.add(tuple(['hello-world',
                             rsp_headers['Location'].split('/')[-1]]))
@@ -1379,7 +1578,7 @@ def test_execute_process(config, api_):
     assert 'Location' in rsp_headers
     response = json.loads(response)
     assert isinstance(response, dict)
-    assert code == 201
+    assert code == HTTPStatus.CREATED
 
     cleanup_jobs.add(tuple(['hello-world',
                             rsp_headers['Location'].split('/')[-1]]))
@@ -1388,13 +1587,13 @@ def test_execute_process(config, api_):
     time.sleep(2)  # Allow time for any outstanding async jobs
     for _, job_id in cleanup_jobs:
         rsp_headers, code, response = api_.delete_job(job_id)
-        assert code == 200
+        assert code == HTTPStatus.OK
 
 
 def test_delete_job(api_):
     rsp_headers, code, response = api_.delete_job('does-not-exist')
 
-    assert code == 404
+    assert code == HTTPStatus.NOT_FOUND
 
     req_body_sync = {
         'inputs': {
@@ -1414,32 +1613,32 @@ def test_delete_job(api_):
         req, 'hello-world')
 
     data = json.loads(response)
-    assert code == 200
+    assert code == HTTPStatus.OK
     assert 'Location' in rsp_headers
     assert data['value'] == 'Hello Sync Test Deletion!'
 
     job_id = rsp_headers['Location'].split('/')[-1]
     rsp_headers, code, response = api_.delete_job(job_id)
 
-    assert code == 200
+    assert code == HTTPStatus.OK
 
     rsp_headers, code, response = api_.delete_job(job_id)
-    assert code == 404
+    assert code == HTTPStatus.NOT_FOUND
 
     req = mock_request(data=req_body_async)
     rsp_headers, code, response = api_.execute_process(
         req, 'hello-world')
 
-    assert code == 201
+    assert code == HTTPStatus.CREATED
     assert 'Location' in rsp_headers
 
     time.sleep(2)  # Allow time for async execution to complete
     job_id = rsp_headers['Location'].split('/')[-1]
     rsp_headers, code, response = api_.delete_job(job_id)
-    assert code == 200
+    assert code == HTTPStatus.OK
 
     rsp_headers, code, response = api_.delete_job(job_id)
-    assert code == 404
+    assert code == HTTPStatus.NOT_FOUND
 
 
 def test_get_collection_edr_query(config, api_):
@@ -1455,19 +1654,19 @@ def test_get_collection_edr_query(config, api_):
     # no coords parameter
     rsp_headers, code, response = api_.get_collection_edr_query(
         req, 'icoads-sst', None, 'position')
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     # bad query type
     req = mock_request({'coords': 'POINT(11 11)'})
     rsp_headers, code, response = api_.get_collection_edr_query(
         req, 'icoads-sst', None, 'corridor')
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     # bad coords parameter
     req = mock_request({'coords': 'gah'})
     rsp_headers, code, response = api_.get_collection_edr_query(
         req, 'icoads-sst', None, 'position')
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     # bad parameter-name parameter
     req = mock_request({
@@ -1475,13 +1674,13 @@ def test_get_collection_edr_query(config, api_):
     })
     rsp_headers, code, response = api_.get_collection_edr_query(
         req, 'icoads-sst', None, 'position')
-    assert code == 400
+    assert code == HTTPStatus.BAD_REQUEST
 
     # all parameters
     req = mock_request({'coords': 'POINT(11 11)'})
     rsp_headers, code, response = api_.get_collection_edr_query(
         req, 'icoads-sst', None, 'position')
-    assert code == 200
+    assert code == HTTPStatus.OK
 
     data = json.loads(response)
 
@@ -1506,7 +1705,7 @@ def test_get_collection_edr_query(config, api_):
     })
     rsp_headers, code, response = api_.get_collection_edr_query(
         req, 'icoads-sst', None, 'position')
-    assert code == 200
+    assert code == HTTPStatus.OK
 
     data = json.loads(response)
 
@@ -1519,7 +1718,7 @@ def test_get_collection_edr_query(config, api_):
     })
     rsp_headers, code, response = api_.get_collection_edr_query(
         req, 'icoads-sst', None, 'position')
-    assert code == 200
+    assert code == HTTPStatus.OK
 
     # no data
     req = mock_request({
@@ -1527,7 +1726,7 @@ def test_get_collection_edr_query(config, api_):
     })
     rsp_headers, code, response = api_.get_collection_edr_query(
         req, 'icoads-sst', None, 'position')
-    assert code == 204
+    assert code == HTTPStatus.NO_CONTENT
 
 
 def test_validate_bbox():

@@ -73,7 +73,7 @@ The below template provides a minimal example (let's call the file ``mycoolvecto
                  select_properties=[], skip_geometry=False, **kwargs):
 
            # optionally specify the output filename pygeoapi can use as part
-           of the response (HTTP Content-Disposition header)
+           # of the response (HTTP Content-Disposition header)
            self.filename = "my-cool-filename.dat"
 
            # open data file (self.data) and process, return
@@ -93,6 +93,10 @@ The below template provides a minimal example (let's call the file ``mycoolvecto
                    }
                }]
            }
+
+       def get_schema():
+           # return a `dict` of a JSON schema (inline or reference)
+           return ('application/geo+json', {'$ref': 'https://geojson.org/schema/Feature.json'})
 
 
 For brevity, the above code will always return the single feature of the dataset.  In reality, the plugin
