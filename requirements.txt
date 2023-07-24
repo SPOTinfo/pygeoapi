@@ -4,7 +4,7 @@ Flask
 future-annotations
 jinja2==3.0.3
 jsonschema
-pydantic
+pydantic<2.0
 pygeofilter
 pygeoif==0.7
 pyproj
