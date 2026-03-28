@@ -76,6 +76,7 @@ def str2locale(value: str, silent: bool = False) -> Union[Locale, None]:
     # if loc:
     #     # Value has been converted before: return cached Locale
     #     return loc
+    loc = None
 
     try:
         loc = Locale.parse(value.strip().replace('-', '_'))
