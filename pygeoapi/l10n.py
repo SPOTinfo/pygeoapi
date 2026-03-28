@@ -72,10 +72,10 @@ def str2locale(value: str, silent: bool = False) -> Union[Locale, None]:
     if isinstance(value, Locale):
         return value
 
-    loc = _lc_cache.get(value)
-    if loc:
-        # Value has been converted before: return cached Locale
-        return loc
+    # loc = _lc_cache.get(value)
+    # if loc:
+    #     # Value has been converted before: return cached Locale
+    #     return loc
 
     try:
         loc = Locale.parse(value.strip().replace('-', '_'))
