@@ -295,16 +295,8 @@ def translate_struct(struct: dict | List[dict],
     if not locale_:
         return struct
 
-    # Check if we already translated the dict before
-    result = _cfg_cache.get(locale_) if is_config else result
-    if not result:
-        # Create deep copy of config and translate/filter values
-        result = deepcopy(struct)
-        _translate_dict(result)
-
-        # Cache translated pygeoapi configs for faster retrieval next time
-        if is_config:
-            _cfg_cache[locale_] = result
+    result = deepcopy(struct)
+    _translate_dict(result)
 
     return result
 
