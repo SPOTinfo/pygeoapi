@@ -262,7 +262,6 @@ def translate_struct(struct: dict | List[dict],
     :returns: A translated dict or list
     """
 
-    @lru_cache(maxsize=128)
     def _translate_dict(obj, level: int = 0):
         """ Recursive function to walk and translate a struct. """
         items = obj.items() if isinstance(obj, dict) else enumerate(obj)
