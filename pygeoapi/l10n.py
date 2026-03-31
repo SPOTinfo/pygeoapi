@@ -74,6 +74,8 @@ def str2locale(value: str, silent: bool = False) -> Union[Locale, None]:
     if isinstance(value, Locale):
         return value
 
+    loc = None
+
     try:
         loc = Locale.parse(value.strip().replace('-', '_'))
     except (ValueError, AttributeError) as err:
