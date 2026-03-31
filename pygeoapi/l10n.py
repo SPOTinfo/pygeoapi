@@ -31,6 +31,7 @@ import logging
 from typing import List, Union
 from collections import OrderedDict
 from copy import deepcopy
+from functools import lru_cache
 
 from babel import Locale
 from babel import UnknownLocaleError as _UnknownLocaleError
@@ -53,6 +54,7 @@ class LocaleError(Exception):
     pass
 
 
+@lru_cache(maxsize=128)
 def str2locale(value: str, silent: bool = False) -> Union[Locale, None]:
     """
     Converts a web locale or language tag into a Babel Locale instance.
@@ -72,12 +74,6 @@ def str2locale(value: str, silent: bool = False) -> Union[Locale, None]:
     if isinstance(value, Locale):
         return value
 
-    # loc = _lc_cache.get(value)
-    # if loc:
-    #     # Value has been converted before: return cached Locale
-    #     return loc
-    loc = None
-
     try:
         loc = Locale.parse(value.strip().replace('-', '_'))
     except (ValueError, AttributeError) as err:
@@ -88,9 +84,6 @@ def str2locale(value: str, silent: bool = False) -> Union[Locale, None]:
         LOGGER.warning(err)
         if not silent:
             raise LocaleError(err)
-    else:
-        # Add to Locale cache
-        _lc_cache[value] = loc
 
     return loc
 
@@ -269,6 +262,7 @@ def translate_struct(struct: dict | List[dict],
     :returns: A translated dict or list
     """
 
+    @lru_cache(maxsize=128)
     def _translate_dict(obj, level: int = 0):
         """ Recursive function to walk and translate a struct. """
         items = obj.items() if isinstance(obj, dict) else enumerate(obj)
