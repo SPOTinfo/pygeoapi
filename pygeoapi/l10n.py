@@ -242,6 +242,7 @@ def translate(value: str, language: Union[Locale, str]):
     return value[loc_items[out_locale]]
 
 
+@lru_cache(maxsize=128)
 def translate_struct(struct: dict | List[dict],
                      locale_: Locale, is_config: bool = False):
     """
@@ -278,9 +279,9 @@ def translate_struct(struct: dict | List[dict],
                 obj[k] = tr
 
     max_level = 1 if is_config else -1
-    result = {}
+
     if not struct:
-        return result
+        return {}
     if not locale_:
         return struct
 
