@@ -5,7 +5,7 @@
 #          Francesco Bartoli <xbartolone@gmail.com>
 #          Angelos Tzotsos <gcpp.kalxas@gmail.com>
 #
-# Copyright (c) 2025 Tom Kralidis
+# Copyright (c) 2026 Tom Kralidis
 # Copyright (c) 2019 Just van den Broecke
 # Copyright (c) 2025 Francesco Bartoli
 # Copyright (c) 2025 Angelos Tzotsos
@@ -34,11 +34,11 @@
 #
 # =================================================================
 
-FROM ubuntu:noble-20250910
+FROM ubuntu:noble
 
 LABEL maintainer="Just van den Broecke <justb4@gmail.com>"
 
-# Docker file for full geoapi server with libs/packages for all providers.
+# Dockerfile for a full pygeoapi server with libs/packages for all providers.
 # Server runs with gunicorn. You can override ENV settings.
 # Defaults:
 # SCRIPT_NAME=/
@@ -48,6 +48,7 @@ LABEL maintainer="Just van den Broecke <justb4@gmail.com>"
 # WSGI_WORKERS=4
 # WSGI_WORKER_TIMEOUT=6000
 # WSGI_WORKER_CLASS=gevent
+# PYGEOAPI_OPENAPI_GENERATE_FAIL_ON_INVALID_COLLECTION=true
 
 # Calls entrypoint.sh to run. Inspect it for options.
 # Contains some test data. Also allows you to verify by running all unit tests.
@@ -132,7 +133,7 @@ ADD . /pygeoapi
 RUN python3 -m venv --system-site-packages /venv \
     && /venv/bin/python3 -m pip install --no-cache-dir -r requirements-docker.txt \
     && /venv/bin/python3 -m pip install --no-cache-dir -r requirements-admin.txt \
-    && /venv/bin/python3 -m pip install --no-cache-dir gunicorn \
+    && /venv/bin/python3 -m pip install --no-cache-dir "gunicorn<24" \
     && /venv/bin/python3 -m pip install --no-cache-dir -e .
 
 # Set default config and entrypoint for Docker Image
