@@ -48,7 +48,7 @@ class LocaleError(Exception):
     pass
 
 
-@lru_cache(maxsize=128)
+@lru_cache(maxsize=None)
 def str2locale(value: str, silent: bool = False) -> Union[Locale, None]:
     """
     Converts a web locale or language tag into a Babel Locale instance.
