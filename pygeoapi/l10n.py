@@ -31,6 +31,7 @@ import logging
 from typing import List, Union
 from collections import OrderedDict
 from copy import deepcopy
+from functools import lru_cache
 
 from babel import Locale
 from babel import UnknownLocaleError as _UnknownLocaleError
@@ -41,18 +42,13 @@ LOGGER = logging.getLogger(__name__)
 # Specifies the name of a request query parameter used to set a locale
 QUERY_PARAM = 'lang'
 
-# Cache Babel Locale lookups by string
-_lc_cache = {}
-
-# Cache translated configurations
-_cfg_cache = {}
-
 
 class LocaleError(Exception):
     """ General exception for any kind of locale parsing error. """
     pass
 
 
+@lru_cache(maxsize=None)
 def str2locale(value: str, silent: bool = False) -> Union[Locale, None]:
     """
     Converts a web locale or language tag into a Babel Locale instance.
@@ -72,10 +68,7 @@ def str2locale(value: str, silent: bool = False) -> Union[Locale, None]:
     if isinstance(value, Locale):
         return value
 
-    loc = _lc_cache.get(value)
-    if loc:
-        # Value has been converted before: return cached Locale
-        return loc
+    loc = None
 
     try:
         loc = Locale.parse(value.strip().replace('-', '_'))
@@ -87,9 +80,6 @@ def str2locale(value: str, silent: bool = False) -> Union[Locale, None]:
         LOGGER.warning(err)
         if not silent:
             raise LocaleError(err)
-    else:
-        # Add to Locale cache
-        _lc_cache[value] = loc
 
     return loc
 
@@ -288,22 +278,14 @@ def translate_struct(struct: dict | List[dict],
                 obj[k] = tr
 
     max_level = 1 if is_config else -1
-    result = {}
+
     if not struct:
-        return result
+        return {}
     if not locale_:
         return struct
 
-    # Check if we already translated the dict before
-    result = _cfg_cache.get(locale_) if is_config else result
-    if not result:
-        # Create deep copy of config and translate/filter values
-        result = deepcopy(struct)
-        _translate_dict(result)
-
-        # Cache translated pygeoapi configs for faster retrieval next time
-        if is_config:
-            _cfg_cache[locale_] = result
+    result = deepcopy(struct)
+    _translate_dict(result)
 
     return result
 

@@ -58,7 +58,7 @@ from pygeoapi.util import get_mimetype, get_api_rules
 def make_wsgi_app(
     config_location: str,
     openapi_location: str,
-    asyncapi_location: str
+    asyncapi_location: str,
 ) -> Flask:
     """
     Create a WSGI application
