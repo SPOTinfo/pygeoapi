@@ -286,6 +286,7 @@ def translate_struct(struct: dict | List[dict],
 
     result = deepcopy(struct)
     _translate_dict(result)
+
     return result
 
 
