@@ -3,7 +3,7 @@
 # Authors: Tom Kralidis <tomkralidis@gmail.com>
 #          Norman Barker <norman.barker@gmail.com>
 #
-# Copyright (c) 2025 Tom Kralidis
+# Copyright (c) 2026 Tom Kralidis
 #
 # Permission is hereby granted, free of charge, to any person
 # obtaining a copy of this software and associated documentation
@@ -46,6 +46,7 @@ import pygeoapi.api.maps as maps_api
 import pygeoapi.api.processes as processes_api
 import pygeoapi.api.stac as stac_api
 import pygeoapi.api.tiles as tiles_api
+from pygeoapi.asyncapi import load_asyncapi_document
 from pygeoapi.openapi import load_openapi_document
 from pygeoapi.config import get_config
 from pygeoapi.util import get_mimetype, get_api_rules
@@ -54,18 +55,24 @@ from pygeoapi.util import get_mimetype, get_api_rules
 # Function to return a WSGI application,
 # passing the locations for the config and
 # openapi files as variables, instead as environment variables
-def make_wsgi_app(config_location: str, openapi_location: str) -> Flask:
+def make_wsgi_app(
+    config_location: str,
+    openapi_location: str,
+    asyncapi_location: str
+) -> Flask:
     """
     Create a WSGI application
     Args:
         config_location (str): location of the pygeoapi config file
         openapi_location (str): location of the OpenAPI document file
+        asyncapi_location (str): location of the AsyncAPI document file
 
     Returns:
         Flask WSGI application
     """
     config = get_config(config_path=config_location)
     openapi = load_openapi_document(pygeoapi_openapi=openapi_location)
+    asyncapi = load_asyncapi_document(pygeoapi_asyncapi=asyncapi_location)
 
     api_rules = get_api_rules(config)
 
@@ -109,7 +116,7 @@ def make_wsgi_app(config_location: str, openapi_location: str) -> Flask:
     app.config['JSONIFY_PRETTYPRINT_REGULAR'] = config['server'].get(
         'pretty_print', True)
 
-    api_ = API(config, openapi)
+    api_ = API(config, openapi, asyncapi)
 
     ogc_schemas_location = config['server'].get('ogc_schemas_location')
 
@@ -202,6 +209,16 @@ def make_wsgi_app(config_location: str, openapi_location: str) -> Flask:
         """
 
         return execute_from_flask(core_api.openapi_, request)
+
+    @blueprint.route('/asyncapi')
+    def asyncapi() -> Response:
+        """
+        AsyncAPI endpoint
+
+        :returns: HTTP response
+        """
+
+        return execute_from_flask(core_api.asyncapi_, request)
 
     @blueprint.route('/conformance')
     def conformance() -> Response:
@@ -433,8 +450,8 @@ def make_wsgi_app(config_location: str, openapi_location: str) -> Flask:
             tileRow, tileCol, skip_valid_check=True
         )
 
-    @blueprint.route('/collections/<collection_id>/map')
-    @blueprint.route('/collections/<collection_id>/styles/<style_id>/map')
+    @blueprint.route('/collections/<path:collection_id>/map')
+    @blueprint.route('/collections/<path:collection_id>/styles/<style_id>/map')
     def collection_map(collection_id: str, style_id: str = None) -> Response:
         """
         OGC API - Maps map render endpoint
@@ -699,7 +716,8 @@ def make_wsgi_app(config_location: str, openapi_location: str) -> Flask:
 if os.environ.get('PYGEOAPI_DISABLE_ENV_CONFIGS', 'false') == 'false':
     APP = make_wsgi_app(
         config_location=None,
-        openapi_location=None
+        openapi_location=None,
+        asyncapi_location=None
     )
     config = get_config()
 
