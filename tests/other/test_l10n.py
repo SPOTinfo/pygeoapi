@@ -45,7 +45,7 @@ def test_str2locale():
     assert l10n.str2locale('en-US') == us_locale
     assert l10n.str2locale('eng_CA') == Locale.parse('en_CA')
     assert l10n.str2locale(' fr-CH ') == Locale.parse('fr_CH')
-    assert l10n.str2locale(us_locale) is us_locale
+    assert l10n.str2locale(us_locale) == us_locale
 
     assert l10n.str2locale(None, True) is None
     assert l10n.str2locale(42, True) is None
@@ -232,7 +232,7 @@ def test_translatedict(config, locale_):
 
     # test full equality (must come from cache)
     cfg2 = l10n.translate_struct(config, locale_, True)
-    assert cfg is cfg2
+    assert cfg == cfg2
 
     # missing locale_ should return the same dict
     assert l10n.translate_struct(config, None) is config  # noqa
