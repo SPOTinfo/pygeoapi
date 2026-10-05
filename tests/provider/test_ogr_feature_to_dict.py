@@ -8,7 +8,7 @@ from pygeoapi.provider.ogr import _feature_to_dict
 
 def make_layer():
     """Create an in-memory OGR layer with a string and an integer field."""
-    ds = ogr.GetDriverByName('MEM').CreateDataSource('mem')
+    ds = ogr.GetDriverByName('Memory').CreateDataSource('mem')
     layer = ds.CreateLayer('test', geom_type=ogr.wkbPoint)
     layer.CreateField(ogr.FieldDefn('name', ogr.OFTString))
     layer.CreateField(ogr.FieldDefn('count', ogr.OFTInteger))
