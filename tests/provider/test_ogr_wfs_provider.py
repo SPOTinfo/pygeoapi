@@ -81,6 +81,10 @@ def mock_ogr_layer():
     #       tests.
     with mock.patch("pygeoapi.provider.ogr.osgeo_ogr") as ogr:
         layer = ogr.GetDriverByName().Open().GetLayerByName()
+        feature = layer.GetNextFeature()
+        feature.GetFieldCount.return_value = 0
+        feature.GetGeometryRef().ExportToJson.return_value = (
+            '{"type": "Point", "coordinates": [4.9, 52.37]}')
         yield layer
 
 
@@ -99,7 +103,7 @@ def test_get(config_MapServer_WFS_cities, mock_ogr_layer):
     """Testing query for a specific object"""
     feature = mock_ogr_layer.GetNextFeature()
     feature.items().values.return_value = ['cities.8338']
-    feature.ExportToJson.return_value = {'id': 'cities.8338'}
+    feature.GetFID.return_value = 'cities.8338'
 
     p = OGRProvider(config_MapServer_WFS_cities)
     result = p.get('cities.8338')
