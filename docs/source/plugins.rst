@@ -464,7 +464,9 @@ Below is a sample process definition as a Python dictionary:
 
 .. note::
 
-   Additional processing plugins can also be found in ``pygeoapi/process``.
+   Additional processing plugins can be found in ``pygeoapi/process``.
+
+.. _example-custom-pygeoapi-formatter:
 
 Example: custom pygeoapi formatter
 ----------------------------------
@@ -500,6 +502,59 @@ The below template provides a minimal example (let's call the file ``mycooljsonf
                out_data['rows'].append(feature['properties'])
 
            return out_data
+
+Example: custom pygeoapi validator
+----------------------------------
+
+Python code
+^^^^^^^^^^^
+
+The below template provides a minimal example (let's call the file ``mycooldatavalidator.py``:
+
+.. code-block:: python
+
+   from pygeoapi.validator.base import BaseValidator, ValidatorValidationError
+
+   class MyCoolDataValidator(BaseValidator):
+       def __init__(self, validator_def):
+           """Inherit from parent class"""
+
+           super().__init__(validator_def)
+
+       def validate(self, data: bytes, partial: bool = False) -> None:
+           if partial:  # plugin does not support partial updates to a given item (PATCH)
+               msg = 'Partial validation not supported'
+               raise ValidatorValidationError(msg)
+
+           # data is bytes of incoming data, validate accordingly
+           if 'some_property' not in data:
+               msg = 'Invalid data payload!'  # to add more detailed messaging, pass user_msg="string of text" to ValidatorValidationError
+               raise ValidatorValidationError(msg)
+
+       def __repr__(self):
+           return '<MyCoolValidator>'
+
+.. note::
+
+   Additional validator plugins can be found in ``pygeoapi/validator``.
+
+Error messages
+--------------
+
+Exceptions raised by plugins are captured by pygeoapi core (``pygeoapi.api``), with generic error messages being returned to the client.  As plugins may raise exceptions with unsanitized or sensitive information, default plugin exception text is always logged for further inspection and corrective action:
+
+.. code:: python
+
+   raise ValidatorValidationError('some error message')  # logged to file or stdout (per logging configuration directive)
+
+
+To provide more fulsome error descriptions, plugins can raise exceptions and use the ``user_msg`` argument:
+
+.. code:: python
+
+   raise ValidatorValidationError(user_msg='custom error message')
+
+The ``user_msg`` will overwrite the generic error message usually provide and be returned as part of the exception report to the client.
 
 
 Featured plugins

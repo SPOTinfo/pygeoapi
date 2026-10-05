@@ -284,7 +284,7 @@ def landing_page(api: API,
         'rel': 'search',
         'type': FORMAT_TYPES[F_JSON],
         'title': l10n.translate('STAC API search', request.locale),
-        'href': f"{api.base_url}/stac-api//search?f={F_JSON}"
+        'href': f"{api.base_url}/stac-api/search?f={F_JSON}"
     }]
 
     return headers, status, to_json(content, api.pretty_print)
@@ -337,7 +337,7 @@ def search(api: API, request: Union[APIRequest, Any]) -> Tuple[dict, int, str]:
     if request.data:
         LOGGER.debug('Intercepting STAC POST request into query args')
         request_data = json.loads(request.data)
-        request_params = deepcopy(dict(request.params))
+        request_params = deepcopy(dict(request.params.items()))
 
         for qp in ['bbox', 'datetime', 'limit', 'offset']:
             if qp in request_data:
@@ -379,9 +379,11 @@ def search(api: API, request: Union[APIRequest, Any]) -> Tuple[dict, int, str]:
                     geom = from_geojson(json.dumps(feature['geometry']))
                     feature['bbox'] = geom.bounds
 
-                for la in ['links', 'assets']:
-                    if feature.get(la) is None:
-                        feature[la] = []
+                if feature.get('links') is None:
+                    feature['links'] = []
+
+                if feature.get('assets') is None:
+                    feature['assets'] = {}
 
     stac_api_response['numberReturned'] = len(stac_api_response['features'])
 
@@ -396,7 +398,7 @@ def search(api: API, request: Union[APIRequest, Any]) -> Tuple[dict, int, str]:
 
     next_link = False
     prev_link = False
-    request_params = deepcopy(dict(request._args))
+    request_params = deepcopy(dict(request.params.items()))
     limit = itemtypes_api.evaluate_limit(
         request_params.get('limit'),
         api.config['server'].get('limits', {}), {})
@@ -488,18 +490,20 @@ def get_temporal(feature: dict) -> dict:
     if datetime_ is None and None not in [start_datetime, end_datetime]:
         LOGGER.debug('Temporal range partially exists')
     elif datetime_ is not None:
+        value['datetime'] = datetime_
         LOGGER.debug('Temporal instant exists')
 
     LOGGER.debug('Attempting to derive temporal from GeoJSON feature')
     LOGGER.debug(feature)
-    if feature.get('time') is not None:
+    if value.get('datetime') is None and feature.get('time') is not None:
         if feature['time'].get('timestamp') is not None:
             value['datetime'] = feature['time']['timestamp']
         if feature['time'].get('interval') is not None:
             value['start_datetime'] = feature['time']['interval'][0]
             value['end_datetime'] = feature['time']['interval'][1]
 
-    if feature['properties'].get('created') is not None:
+    if value.get('datetime') is None \
+       and feature['properties'].get('created') is not None:
         value['datetime'] = feature['properties']['created']
 
     if not value:

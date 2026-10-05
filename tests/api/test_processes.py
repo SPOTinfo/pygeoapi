@@ -95,7 +95,7 @@ def test_describe_processes(config, api_):
     assert process['title'] == 'Hello World'
     assert len(process['keywords']) == 3
     assert len(process['links']) == 6
-    assert len(process['inputs']) == 2
+    assert len(process['inputs']) == 4
     assert len(process['outputs']) == 1
     assert len(process['outputTransmission']) == 1
     assert len(process['jobControlOptions']) == 2
@@ -242,6 +242,18 @@ def test_execute_process(config, api_):
             'name': 'Test document'
         }
     }
+    req_body_10 = {
+        'inputs': {
+            'name': 'Test document as bytes response',
+            'as_bytes': True
+        }
+    }
+    req_body_11 = {
+        'inputs': {
+            'name': 'Test document as text/plain media type',
+            'media_type': 'text/plain'
+        }
+    }
 
     cleanup_jobs = set()
 
@@ -385,11 +397,12 @@ def test_execute_process(config, api_):
         rsp_headers, code, response = execute_process(api_, req, 'hello-world')
     assert code == HTTPStatus.OK
     post_mocker.assert_any_call(
-        req_body_7['subscriber']['inProgressUri'], json={}
+        req_body_7['subscriber']['inProgressUri'], json={},
+        allow_redirects=False
     )
     post_mocker.assert_any_call(
         req_body_7['subscriber']['successUri'],
-        json={'id': 'echo', 'value': 'Hello Test!'}
+        json={'id': 'echo', 'value': 'Hello Test!'}, allow_redirects=False
     )
     assert post_mocker.call_count == 2
 
@@ -408,6 +421,19 @@ def test_execute_process(config, api_):
     rsp_headers, code, response = execute_process(api_, req, 'hello-world')
 
     response2 = '{"id":"echo","value":"Hello Test document!"}'
+    assert response == response2
+
+    req = mock_api_request(data=req_body_10)
+    rsp_headers, code, response = execute_process(api_, req, 'hello-world')
+
+    response2 = '{"id":"echo","value":"Hello Test document as bytes response!"}'  # noqa
+    assert response == response2
+
+    req = mock_api_request(data=req_body_11)
+    rsp_headers, code, response = execute_process(api_, req, 'hello-world')
+
+    assert rsp_headers['Content-Type'] == 'text/plain'
+    response2 = '{"id":"echo","value":"Hello Test document as text/plain media type!"}'  # noqa
     assert response == response2
 
     # Cleanup
@@ -480,16 +506,17 @@ def test_get_job_result(api_):
     assert code == HTTPStatus.NOT_FOUND
 
     job_id = _execute_a_job(api_)
-    rsp_headers, code, response = get_job_result(api_, mock_api_request(),
-                                                 job_id)
-    # default response is html
+    rsp_headers, code, response = get_job_result(
+        api_, mock_api_request({'f': 'html'}), job_id)
+
     assert code == HTTPStatus.OK
     assert rsp_headers['Content-Type'] == 'text/html'
     result = 'JSON.stringify({"id":"echo","value":"Hello Sync Test!"}'
     assert result in response
 
+    # default response is json
     rsp_headers, code, response = get_job_result(
-        api_, mock_api_request({'f': 'json'}), job_id,
+        api_, mock_api_request(), job_id
     )
     assert code == HTTPStatus.OK
     assert rsp_headers['Content-Type'] == 'application/json'

@@ -273,6 +273,9 @@ default.
                 include_extra_query_parameters: false  # include extra query parameters that are not part of the collection properties (default: false)
                 # editable transactions: DO NOT ACTIVATE unless you have setup access control beyond pygeoapi
                 editable: true  # optional: if backend is writable, default is false
+                # count: include `numberMatched` in collection results responses, for providers
+                # that require an additional query to calculate this value (e.g. a SQL COUNT query).
+                count: true  # optional: perform additional count on queries, default is true
                 # coordinate reference systems (CRS) section is optional
                 # default CRSs are http://www.opengis.net/def/crs/OGC/1.3/CRS84 (coordinates without height)
                 # and http://www.opengis.net/def/crs/OGC/1.3/CRS84h (coordinates with ellipsoidal height)
@@ -283,6 +286,8 @@ default.
                 storage_crs: http://www.opengis.net/def/crs/OGC/1.3/CRS84  # optional CRS in which data is stored, default: as 'crs' field
                 storage_crs_coordinate_epoch: 2017.23  # optional, if storage_crs is a dynamic coordinate reference system
                 always_xy: false  # optional should CRS respect axis ordering
+                validator:
+                    name: path.to.validator  # Python path of validation definition
           formatters:  # list of 1..n formatter definitions
               - name: path.to.formatter  # Python path of formatter definition
                 attachment: true  # whether or not to provide as an attachment or normal response
@@ -292,6 +297,10 @@ default.
           type: process  # REQUIRED (collection, process, or stac-collection)
           processor:
               name: HelloWorld  # Python path of process definition
+          # optional, allow for internal HTTP request execution
+          # if set to True, enables requests to link local ranges and loopback
+          # default: False
+          allow_internal_requests: True
 
 
 .. seealso::

@@ -322,7 +322,7 @@ class OGRProvider(BaseProvider):
                 LOGGER.debug('processing properties')
 
                 attribute_filter = ' and '.join(
-                    map(lambda x: f'{x[0]} = \'{x[1]}\'', properties)
+                    map(lambda x: f'{x[0]} = {self.sanitize_attribute_value(x[1])}', properties)  # noqa
                 )
 
                 LOGGER.debug(attribute_filter)
@@ -410,7 +410,9 @@ class OGRProvider(BaseProvider):
             LOGGER.debug(f'Fetching identifier {identifier}')
             layer = self._get_layer()
 
-            layer.SetAttributeFilter(f"{self.id_field} = '{identifier}'")
+            identifier2 = self.sanitize_attribute_value(identifier)
+
+            layer.SetAttributeFilter(f'{self.id_field} = {identifier2}')
 
             ogr_feature = self._get_next_feature(layer, identifier)
             result = self._ogr_feature_to_json(

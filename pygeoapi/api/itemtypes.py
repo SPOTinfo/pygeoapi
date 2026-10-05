@@ -43,7 +43,7 @@ import logging
 from typing import Any, Tuple, Union
 import urllib.parse
 
-from pygeofilter.parsers.ecql import parse as parse_ecql_text
+from pygeofilter.parsers.cql2_text import parse as parse_cql2_text
 from pygeofilter.parsers.cql2_json import parse as parse_cql2_json
 from pyproj.exceptions import CRSError
 
@@ -63,6 +63,7 @@ from pygeoapi.provider import filter_providers_by_type, get_provider_by_type
 from pygeoapi.provider.base import (
     ProviderGenericError, ProviderItemNotFoundError,
     ProviderTypeError, SchemaType)
+from pygeoapi.validator.base import ValidatorGenericError
 
 from pygeoapi.util import (to_json, filter_dict_by_key_value, str2bool,
                            render_j2_template, get_dataset_formatters)
@@ -83,8 +84,11 @@ CONFORMANCE_CLASSES_FEATURES = [
     'http://www.opengis.net/spec/ogcapi-features-3/1.0/conf/queryables',
     'http://www.opengis.net/spec/ogcapi-features-3/1.0/conf/queryables-query-parameters',  # noqa
     'http://www.opengis.net/spec/ogcapi-features-4/1.0/conf/create-replace-delete',  # noqa
-    'http://www.opengis.net/spec/ogcapi-features-5/1.0/conf/schemas',
-    'http://www.opengis.net/spec/ogcapi-features-5/1.0/conf/core-roles-features'  # noqa
+    'http://www.opengis.net/spec/ogcapi-common-3/1.0/conf/schemas',
+    'http://www.opengis.net/spec/ogcapi-common-3/1.0/conf/advanced-property-roles',  # noqa
+    'http://www.opengis.net/spec/cql2/1.0/conf/cql2-text',
+    'http://www.opengis.net/spec/cql2/1.0/conf/basic-cql2'
+
 ]
 
 CONFORMANCE_CLASSES_RECORDS = [
@@ -488,7 +492,7 @@ def get_collection_items(
 
     if cql_text is not None:
         try:
-            filter_ = parse_ecql_text(cql_text)
+            filter_ = parse_cql2_text(cql_text)
             filter_ = modify_pygeofilter(
                 filter_,
                 filter_crs_uri=filter_crs_uri,
@@ -522,8 +526,8 @@ def get_collection_items(
 
     LOGGER.debug('Processing filter-lang parameter')
     filter_lang = request.params.get('filter-lang')
-    # Currently only cql-text is handled, but it is optional
-    if filter_lang not in [None, 'cql-json', 'cql-text']:
+    filter_langs = [None, 'cql-json', 'cql-text', 'cql2-text', 'cql2-json']
+    if filter_lang not in filter_langs:
         msg = 'Invalid filter language'
         return api.get_exception(
             HTTPStatus.BAD_REQUEST, headers, request.format,
@@ -615,7 +619,6 @@ def get_collection_items(
         if offset > 0:
             prev_link = True
 
-    print(request.format)
     if prev_link:
         prev = max(0, offset - limit)
         url = f'{uri}?offset={prev}{serialized_query_params}'
@@ -691,6 +694,7 @@ def get_collection_items(
             content = formatter.write(
                 data=content,
                 options={
+                    'content_crs': query_crs_uri,
                     'provider_def': get_provider_by_type(
                         collections[dataset]['providers'],
                         'feature')
@@ -793,6 +797,28 @@ def manage_collection_item(
         return api.get_exception(
             HTTPStatus.BAD_REQUEST, headers, request.format,
             'InvalidParameterValue', msg)
+
+    if action in ['create', 'update']:
+        if p.validator is not None:
+            LOGGER.debug('Provider is configured for validation')
+            LOGGER.debug('Loading validator')
+            try:
+                v = load_plugin('validator', {'name': p.validator['name']})
+            except Exception:
+                msg = 'Invalid validator configured'
+                return api.get_exception(
+                    HTTPStatus.INTERNAL_SERVER_ERROR, headers, request.format,
+                    'NoApplicableCode', msg)
+
+            LOGGER.debug('Validating item')
+            try:
+                v.validate(request.data)
+            except ValidatorGenericError as err:
+                msg = err.user_msg or 'Item is not valid, please check and validate payload'  # noqa
+                LOGGER.error(f'Validation errors: {err.message}')
+                return api.get_exception(
+                   err.http_status_code, headers, request.format,
+                   err.ogc_exception_code, msg)
 
     if action == 'create':
         LOGGER.debug('Creating item')

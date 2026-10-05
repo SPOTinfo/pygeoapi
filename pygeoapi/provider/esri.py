@@ -3,6 +3,7 @@
 # Authors: Benjamin Webb <bwebb@lincolninst.edu>
 #
 # Copyright (c) 2022 Benjamin Webb
+# Copyright (c) 2026 Tom Kralidis
 #
 # Permission is hereby granted, free of charge, to any person
 # obtaining a copy of this software and associated documentation
@@ -156,8 +157,12 @@ class ESRIServiceProvider(BaseProvider):
         fc = {
             'type': 'FeatureCollection',
             'features': [],
-            'numberMatched': self._get_count(params)
         }
+
+        if self.count or resulttype == 'hits':
+            matched = self._get_count(params)
+            LOGGER.debug(f'Found {matched} result(s)')
+            fc['numberMatched'] = matched
 
         if resulttype == 'hits':
             return fc
@@ -168,7 +173,7 @@ class ESRIServiceProvider(BaseProvider):
         params['resultOffset'] = offset
         params['resultRecordCount'] = limit
 
-        hits_ = min(limit, fc['numberMatched'])
+        hits_ = min(limit, matched) if self.count else limit
         fc['features'] = self._get_all(params, hits_)
 
         fc['numberReturned'] = len(fc['features'])
@@ -305,13 +310,9 @@ class ESRIServiceProvider(BaseProvider):
 
         p = []
 
-        if properties != []:
-
+        if properties:
             for (k, v) in properties:
-                if 'String' in self.fields[k]['type']:
-                    p.append(f"{k} = '{v}'")
-                else:
-                    p.append(f"{k} = {v}")
+                p.append(f'{k} = {self.sanitize_attribute_value(v)}')
 
         if datetime_ is not None:
 

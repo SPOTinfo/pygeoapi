@@ -324,29 +324,14 @@ def get_jobs(api: API, request: APIRequest,
         if JobStatus[job_['status']] in (
            JobStatus.successful, JobStatus.running, JobStatus.accepted):
 
-            job_result_url = f"{api.base_url}/jobs/{job_['identifier']}/results"  # noqa
+            job_result_url = f"{api.base_url}/jobs/{job_['identifier']}/results?f={F_JSON}"  # noqa
 
             job2['links'] = [{
-                'href': f'{job_result_url}?f={F_HTML}',
+                'href': job_result_url,
                 'rel': 'http://www.opengis.net/def/rel/ogc/1.0/results',
-                'type': FORMAT_TYPES[F_HTML],
-                'title': l10n.translate(f'Results of job as HTML', request.locale),  # noqa
-            }, {
-                'href': f'{job_result_url}?f={F_JSON}',
-                'rel': 'http://www.opengis.net/def/rel/ogc/1.0/results',
-                'type': FORMAT_TYPES[F_JSON],
-                'title': l10n.translate(f'Results of job as JSON', request.locale),  # noqa
+                'type': job_['mimetype'],
+                'title': f"Results of job {job_['identifier']} as {job_['mimetype']}"  # noqa
             }]
-
-            if job_['mimetype'] not in (FORMAT_TYPES[F_JSON],
-                                        FORMAT_TYPES[F_HTML]):
-
-                job2['links'].append({
-                    'href': job_result_url,
-                    'rel': 'http://www.opengis.net/def/rel/ogc/1.0/results',  # noqa
-                    'type': job_['mimetype'],
-                    'title': f"Results of job {job_id} as {job_['mimetype']}"  # noqa
-                })
 
         serialized_jobs['jobs'].append(job2)
 
@@ -528,7 +513,10 @@ def execute_process(api: API, request: APIRequest,
             pretty_print_ = False
         response2 = to_json(response, pretty_print_)
     else:
+        pretty_print_ = False
         response2 = response
+        if isinstance(response, (list, dict)):
+            response2 = to_json(response, pretty_print_)
 
     if (headers.get('Preference-Applied', '') == RequestedProcessExecutionMode.respond_async.value):  # noqa
         LOGGER.debug('Asynchronous mode detected, returning statusInfo')
@@ -604,20 +592,18 @@ def get_job_result(api: API, request: APIRequest,
     if mimetype not in (None, FORMAT_TYPES[F_JSON]):
         headers['Content-Type'] = mimetype
         content = job_output
+    elif request.format == F_HTML:
+        headers['Content-Type'] = "text/html"
+        data = {
+            'job': {'id': job_id},
+            'result': job_output
+        }
+        content = render_j2_template(
+            api.config, api.config['server']['templates'],
+            'jobs/results/index.html', data, request.locale)
     else:
-        if request.format == F_JSON:
-            content = json.dumps(job_output, sort_keys=True, indent=4,
-                                 default=json_serial)
-        else:
-            # HTML
-            headers['Content-Type'] = "text/html"
-            data = {
-                'job': {'id': job_id},
-                'result': job_output
-            }
-            content = render_j2_template(
-                api.config, api.config['server']['templates'],
-                'jobs/results/index.html', data, request.locale)
+        content = json.dumps(job_output, sort_keys=True, indent=4,
+                             default=json_serial)
 
     return headers, HTTPStatus.OK, content
 

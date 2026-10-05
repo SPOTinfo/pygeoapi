@@ -3,6 +3,7 @@
 # Authors: Benjamin Webb <bwebb@lincolninst.edu>
 #
 # Copyright (c) 2022 Benjamin Webb
+# Copyright (c) 2026 Tom Kralidis
 #
 # Permission is hereby granted, free of charge, to any person
 # obtaining a copy of this software and associated documentation
@@ -85,6 +86,19 @@ def test_query(config):
     assert results['numberMatched'] == 406
 
 
+def test_no_count(config):
+    p = ESRIServiceProvider(config)
+    results = p.query()
+    assert results['numberMatched'] == 406
+    assert results['numberReturned'] == 10
+
+    config['count'] = False
+    p = ESRIServiceProvider(config)
+    results = p.query()
+    assert 'numberMatched' not in results
+    assert results['numberReturned'] == 10
+
+
 def test_geometry(config):
     p = ESRIServiceProvider(config)
 
@@ -154,6 +168,16 @@ def test_query_properties(config):
 
     results = p.query(select_properties=['GEOGSTATE', ])
     assert len(results['features'][0]['properties']) == 1
+
+    results = p.query(
+        properties=[
+            ('OBJECTID', "1' OR '1'='1")
+        ]
+    )
+
+    assert results.get('type') == 'FeatureCollection'
+    features = results.get('features')
+    assert len(features) == 0
 
 
 def test_query_sortby_datetime(config):

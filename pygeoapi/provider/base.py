@@ -81,6 +81,7 @@ class BaseProvider:
         self.include_extra_query_parameters = provider_def.get('include_extra_query_parameters', False)  # noqa
         self._fields = {}
         self.filename = None
+        self.validator = provider_def.get('validator')
 
         # CRS properties
         storage_crs_uri = provider_def.get('storage_crs', DEFAULT_STORAGE_CRS)
@@ -294,6 +295,27 @@ class BaseProvider:
 
         return identifier2, json_data
 
+    def sanitize_attribute_value(self, value) -> str:
+        """
+        Sanitize an attribute value used in an
+        OGR layer SetAttributeFilter function
+
+        :param value: `str` of attribute value
+
+        :returns: `str` of sanitized attribute value
+        """
+
+        if value is None:
+            return 'NULL'
+
+        if isinstance(value, bool):
+            return '1' if value else '0'
+
+        if isinstance(value, (int, float)):
+            return f"'{value}'"
+
+        return "'" + str(value).replace("'", "''") + "'"
+
     def __repr__(self):
         return f'<BaseProvider> {self.type}'
 
@@ -316,7 +338,7 @@ class ProviderTypeError(ProviderGenericError):
 
 class ProviderInvalidQueryError(ProviderGenericError):
     """provider invalid query error"""
-    ogc_exception_code = 'InvalidQuery'
+    ogc_exception_code = 'InvalidParameterValue'
     http_status_code = HTTPStatus.BAD_REQUEST
     default_msg = "query error"
 
