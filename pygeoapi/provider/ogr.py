@@ -498,6 +498,8 @@ class OGRProvider(BaseProvider):
         # NB With GDAL >= 3.3 seems that Axis is swapped for e.g.
         # EPSG:4258 in ExportToJson where it shouldn't. See #1174.
         # Suppress swapping by unassigning SpatialReference
+        # Features without geometry return None; guard to avoid
+        # AttributeError on None (formerly, ExportToJson handled this internally)
         if geom is not None:
             geom.AssignSpatialReference(None)
         json_feature = _feature_to_dict(ogr_feature, geom)
@@ -901,6 +903,8 @@ def _feature_to_dict(ogr_feature, geom) -> dict:
         else:
             properties[name] = None
 
+    # Only the geometry is still serialized via GDAL (cheap, done once);
+    # null geometries map to GeoJSON null, as ExportToJson did
     geometry = None
     if geom is not None:
         geometry = json.loads(geom.ExportToJson())

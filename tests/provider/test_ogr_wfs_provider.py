@@ -81,6 +81,9 @@ def mock_ogr_layer():
     #       tests.
     with mock.patch("pygeoapi.provider.ogr.osgeo_ogr") as ogr:
         layer = ogr.GetDriverByName().Open().GetLayerByName()
+        # _feature_to_dict iterates range(GetFieldCount()) and json-parses
+        # geom.ExportToJson(); bare MagicMocks would break both (range of a
+        # mock, json.loads of a mock), so give them concrete return values
         feature = layer.GetNextFeature()
         feature.GetFieldCount.return_value = 0
         feature.GetGeometryRef().ExportToJson.return_value = (
