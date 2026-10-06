@@ -109,7 +109,7 @@ def make_wsgi_app(
     if config['server'].get('cors', False):
         try:
             from flask_cors import CORS
-            CORS(app, CORS_EXPOSE_HEADERS=['*'])
+            CORS(app, expose_headers='*')
         except ModuleNotFoundError:
             print('Python package flask-cors required for CORS support')
 

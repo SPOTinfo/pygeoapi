@@ -21,7 +21,8 @@ pygeometa
 pymongo==4.6.3
 pymysql
 scipy
+SQLAlchemy<2.1
 sodapy
-xarray
+xarray<2026.9
 zarr<3
 s3fs<=2023.6.0

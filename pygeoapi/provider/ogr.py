@@ -33,6 +33,7 @@
 from copy import deepcopy
 import functools
 import importlib
+import json
 import logging
 import os
 from typing import Any
@@ -497,8 +498,11 @@ class OGRProvider(BaseProvider):
         # NB With GDAL >= 3.3 seems that Axis is swapped for e.g.
         # EPSG:4258 in ExportToJson where it shouldn't. See #1174.
         # Suppress swapping by unassigning SpatialReference
-        geom.AssignSpatialReference(None)
-        json_feature = ogr_feature.ExportToJson(as_object=True)
+        # Features without geometry return None; guard to avoid
+        # AttributeError on None (ExportToJson handled this internally)
+        if geom is not None:
+            geom.AssignSpatialReference(None)
+        json_feature = _feature_to_dict(ogr_feature, geom)
 
         if skip_geometry:
             json_feature['geometry'] = None
@@ -874,6 +878,43 @@ class GdalErrorHandler:
                         raise ProviderConnectionError(last_error)
             else:
                 raise ProviderGenericError(last_error)
+
+
+# AI generated code: Junie claude-opus-5-5
+def _feature_to_dict(ogr_feature, geom) -> dict:
+    """
+    Convert an OGR feature to a GeoJSON-like dict.
+
+    Replaces ``ogr.Feature.ExportToJson``, which looks up every field by
+    name and scales quadratically with the number of fields. Reading the
+    fields by index is an order of magnitude faster for wide layers.
+
+    :param ogr_feature: OGR feature
+    :param geom: (optionally reprojected) OGR geometry or `None`
+
+    :returns: dict with type, geometry, properties and id
+    """
+
+    properties = {}
+    for i in range(ogr_feature.GetFieldCount()):
+        name = ogr_feature.GetFieldDefnRef(i).GetName()
+        if ogr_feature.IsFieldSetAndNotNull(i):
+            properties[name] = ogr_feature.GetField(i)
+        else:
+            properties[name] = None
+
+    # Only the geometry is still serialized via GDAL (cheap, done once);
+    # null geometries map to GeoJSON null, as ExportToJson did
+    geometry = None
+    if geom is not None:
+        geometry = json.loads(geom.ExportToJson())
+
+    return {
+        'type': 'Feature',
+        'geometry': geometry,
+        'properties': properties,
+        'id': ogr_feature.GetFID()
+    }
 
 
 def _silent_gdal_error(f):
