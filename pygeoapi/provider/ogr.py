@@ -499,7 +499,7 @@ class OGRProvider(BaseProvider):
         # EPSG:4258 in ExportToJson where it shouldn't. See #1174.
         # Suppress swapping by unassigning SpatialReference
         # Features without geometry return None; guard to avoid
-        # AttributeError on None (formerly, ExportToJson handled this internally)
+        # AttributeError on None (ExportToJson handled this internally)
         if geom is not None:
             geom.AssignSpatialReference(None)
         json_feature = _feature_to_dict(ogr_feature, geom)
