@@ -32,6 +32,7 @@
 # Needs to be run like: python3 -m pytest
 
 import logging
+import os
 
 import pytest
 
@@ -425,3 +426,57 @@ def test_query_with_property_filtering(config_gpkg_4326):
     assert feature_collection.get('type') == 'FeatureCollection'
     features = feature_collection.get('features')
     assert len(features) == 0
+
+
+def test_query_with_property_filtering_and_offset(config_gpkg_4326):
+    """Testing that paging applies to the filtered features"""
+
+    p = OGRProvider(config_gpkg_4326)
+    properties = [('straatnaam', 'Arnhemseweg')]
+
+    all_ids = [f['id'] for f in p.query(
+        limit=1000, properties=properties)['features']]
+    assert len(all_ids) > 4
+
+    page = p.query(offset=2, limit=2, properties=properties)
+    page_ids = [f['id'] for f in page['features']]
+    assert page_ids == all_ids[2:4]
+    for feature in page['features']:
+        assert feature['properties']['straatnaam'] == 'Arnhemseweg'
+
+    page = p.query(offset=2, limit=2, properties=[
+        ('straatnaam', "Arnhemseweg' OR '1'='1")])
+    assert len(page['features']) == 0
+
+
+def test_query_vrt_with_property_filtering_and_offset(tmp_path):
+    """Testing that paging applies to the filtered features of a VRT,
+    which uses OGR SQL instead of the GeoPackage SQL dialect"""
+
+    source = os.path.abspath('./tests/data/dutch_addresses_4326.gpkg')
+    vrt = tmp_path / 'addresses.vrt'
+    vrt.write_text(
+        '<OGRVRTDataSource><OGRVRTLayer name="addresses">'
+        f'<SrcDataSource>{source}</SrcDataSource>'
+        '<SrcLayer>OGRGeoJSON</SrcLayer>'
+        '</OGRVRTLayer></OGRVRTDataSource>')
+    p = OGRProvider({
+        'name': 'OGR',
+        'type': 'feature',
+        'data': {
+            'source_type': 'VRT',
+            'source': str(vrt),
+            'source_capabilities': {'paging': True},
+        },
+        'id_field': 'id',
+        'layer': 'addresses'
+    })
+    properties = [('straatnaam', 'Arnhemseweg')]
+
+    all_ids = [f['id'] for f in p.query(
+        limit=1000, properties=properties)['features']]
+    assert len(all_ids) > 4
+
+    page = p.query(offset=2, limit=2, properties=properties)
+    page_ids = [f['id'] for f in page['features']]
+    assert page_ids == all_ids[2:4]

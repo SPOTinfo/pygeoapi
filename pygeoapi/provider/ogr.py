@@ -301,10 +301,22 @@ class OGRProvider(BaseProvider):
         """
         result = None
         try:
+            attribute_filter = None
+            if properties:
+                attribute_filter = ' and '.join(
+                    map(lambda x: f'{x[0]} = {self.sanitize_attribute_value(x[1])}', properties)  # noqa
+                )
+                LOGGER.debug(attribute_filter)
+
             if self.source_capabilities['paging']:
                 self.source_helper.enable_paging(offset, limit)
+                self.source_helper.attribute_filter = attribute_filter
 
             layer = self._get_layer()
+            filter_applied = getattr(
+                self.source_helper, 'attribute_filter_applied', False)
+            self.source_helper.attribute_filter = None
+            self.source_helper.attribute_filter_applied = False
 
             if bbox:
                 LOGGER.debug('processing bbox parameter')
@@ -319,15 +331,8 @@ class OGRProvider(BaseProvider):
                 # layer.SetSpatialFilterRect(
                 # float(minx), float(miny), float(maxx), float(maxy))
 
-            if properties:
+            if attribute_filter and not filter_applied:
                 LOGGER.debug('processing properties')
-
-                attribute_filter = ' and '.join(
-                    map(lambda x: f'{x[0]} = {self.sanitize_attribute_value(x[1])}', properties)  # noqa
-                )
-
-                LOGGER.debug(attribute_filter)
-
                 layer.SetAttributeFilter(attribute_filter)
 
             # Make response based on resulttype specified
@@ -665,6 +670,8 @@ class CommonSourceHelper(SourceHelper):
         self.offset = -1
         self.limit = -1
         self.result_set = None
+        self.attribute_filter = None
+        self.attribute_filter_applied = False
 
     def close(self):
         """
@@ -715,8 +722,9 @@ class CommonSourceHelper(SourceHelper):
 
         self.close()
 
-        sql = f'SELECT * FROM "{self.provider.layer_name}" LIMIT {self.limit} OFFSET {self.offset}'  # noqa
+        sql = self.paging_sql(f'"{self.provider.layer_name}"')
         self.result_set = self.provider.conn.ExecuteSQL(sql)
+        self.attribute_filter_applied = bool(self.attribute_filter)
 
         # Reset since needs to be set each time explicitly
         self.offset = -1
@@ -728,6 +736,23 @@ class CommonSourceHelper(SourceHelper):
             raise Exception(msg)
 
         return self.result_set
+
+    def paging_sql(self, layer_name):
+        """
+        Build the OGR SQL SELECT for the current page.
+
+        The attribute filter is part of the WHERE clause, so that filtering
+        happens before paging (and can use the driver and its indexes),
+        instead of filtering an already paged result set.
+
+        :param layer_name: layer name as it must appear in the SQL
+
+        :returns: OGR SQL statement
+        """
+        where = ''
+        if self.attribute_filter:
+            where = f' WHERE {self.attribute_filter}'
+        return f'SELECT * FROM {layer_name}{where} LIMIT {self.limit} OFFSET {self.offset}'  # noqa
 
 
 class ESRIJSONHelper(CommonSourceHelper):
@@ -775,8 +800,9 @@ class ESRIJSONHelper(CommonSourceHelper):
 
         self.close()
 
-        sql = f"SELECT * FROM {self.provider.layer_name} LIMIT {self.limit} OFFSET {self.offset}"  # noqa
+        sql = self.paging_sql(self.provider.layer_name)
         self.result_set = self.provider.conn.ExecuteSQL(sql)
+        self.attribute_filter_applied = bool(self.attribute_filter)
 
         # Reset since needs to be set each time explicitly
         self.offset = -1
