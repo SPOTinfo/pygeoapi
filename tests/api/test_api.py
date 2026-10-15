@@ -846,7 +846,8 @@ def test_describe_collections_enclosures(config_enclosure, enclosure_api):
         if lnk['rel'] == 'enclosure'
     }
 
-    # Avoid real HEAD requests to remote enclosure links to prevent failing on network errors
+    # Avoid real HEAD requests to remote enclosure links
+    # to prevent failing on network errors
     headers = CaseInsensitiveDict({
         'content-type': 'image/png',
         'content-length': '17861',
