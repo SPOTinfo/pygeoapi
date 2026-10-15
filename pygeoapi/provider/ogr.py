@@ -310,7 +310,7 @@ class OGRProvider(BaseProvider):
                     raise ProviderInvalidQueryError(user_msg=msg)
 
             attribute_filter = ' and '.join(
-                f'{self._quote_identifier(name)} = '
+                f'"{name}.replace('"', '""')" = '
                 f'{self.sanitize_attribute_value(value)}'
                 for name, value in properties
             )
@@ -373,18 +373,6 @@ class OGRProvider(BaseProvider):
             self._close()
 
         return result
-
-    @staticmethod
-    def _quote_identifier(name) -> str:
-        """
-        Quote an attribute name as an SQL identifier
-
-        :param name: attribute name
-
-        :returns: `str` of double-quoted identifier
-        """
-
-        return '"' + str(name).replace('"', '""') + '"'
 
     def _get_spatial_ref_from_epsg(self, epsg_code, force_auth_comply=False):
         axis_order = osgeo_osr.OAMS_AUTHORITY_COMPLIANT

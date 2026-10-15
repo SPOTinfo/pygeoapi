@@ -112,11 +112,6 @@ def test_query_property_injection(config_poi_portugal):
             p.query(properties=[(name, 'cafe')])
 
 
-def test_quote_identifier():
-    assert OGRProvider._quote_identifier('fclass') == '"fclass"'
-    assert OGRProvider._quote_identifier('a"b') == '"a""b"'
-
-
 def test_get_not_existing_feature_raise_exception(
     config_poi_portugal
 ):
