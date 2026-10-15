@@ -36,7 +36,8 @@ import os
 
 import pytest
 
-from pygeoapi.provider.base import ProviderItemNotFoundError
+from pygeoapi.provider.base import (
+    ProviderInvalidQueryError, ProviderItemNotFoundError)
 from pygeoapi.provider.ogr import OGRProvider
 
 
@@ -88,6 +89,32 @@ def test_get(config_poi_portugal):
     with pytest.raises(ProviderItemNotFoundError):
         item_id = "x' OR (SELECT substr(sql,1,1) FROM sqlite_master WHERE name='secret_table')='C"  # noqa
         p.get(item_id)
+
+
+def test_query_property_injection(config_poi_portugal):
+    """Testing property names cannot inject SQL"""
+
+    config_poi_portugal['include_extra_query_parameters'] = True
+    p = OGRProvider(config_poi_portugal)
+
+    results = p.query(properties=[('fclass', 'cafe')])
+    assert len(results['features']) > 0
+    for feature in results['features']:
+        assert feature['properties']['fclass'] == 'cafe'
+
+    malicious = [
+        '1=1 UNION SELECT * FROM poi_portugal --',
+        'fclass = fclass OR 1',
+        'fclass" = "fclass" OR "1',
+    ]
+    for name in malicious:
+        with pytest.raises(ProviderInvalidQueryError):
+            p.query(properties=[(name, 'cafe')])
+
+
+def test_quote_identifier():
+    assert OGRProvider._quote_identifier('fclass') == '"fclass"'
+    assert OGRProvider._quote_identifier('a"b') == '"a""b"'
 
 
 def test_get_not_existing_feature_raise_exception(

@@ -46,7 +46,7 @@ from pygeoapi.crs import get_crs
 from pygeoapi.provider.base import (
     BaseProvider, ProviderGenericError,
     ProviderQueryError, ProviderConnectionError,
-    ProviderItemNotFoundError)
+    ProviderItemNotFoundError, ProviderInvalidQueryError)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -300,14 +300,23 @@ class OGRProvider(BaseProvider):
         :returns: dict of 0..n GeoJSON features
         """
         result = None
-        try:
-            attribute_filter = None
-            if properties:
-                attribute_filter = ' and '.join(
-                    map(lambda x: f'{x[0]} = {self.sanitize_attribute_value(x[1])}', properties)  # noqa
-                )
-                LOGGER.debug(attribute_filter)
+        attribute_filter = None
+        if properties:
+            fields = self.fields
+            for name, _ in properties:
+                if name not in fields:
+                    msg = f'unknown property {name}'
+                    LOGGER.error(msg)
+                    raise ProviderInvalidQueryError(user_msg=msg)
 
+            attribute_filter = ' and '.join(
+                f'{self._quote_identifier(name)} = '
+                f'{self.sanitize_attribute_value(value)}'
+                for name, value in properties
+            )
+            LOGGER.debug(attribute_filter)
+
+        try:
             if self.source_capabilities['paging']:
                 self.source_helper.enable_paging(offset, limit)
                 self.source_helper.attribute_filter = attribute_filter
@@ -364,6 +373,18 @@ class OGRProvider(BaseProvider):
             self._close()
 
         return result
+
+    @staticmethod
+    def _quote_identifier(name) -> str:
+        """
+        Quote an attribute name as an SQL identifier
+
+        :param name: attribute name
+
+        :returns: `str` of double-quoted identifier
+        """
+
+        return '"' + str(name).replace('"', '""') + '"'
 
     def _get_spatial_ref_from_epsg(self, epsg_code, force_auth_comply=False):
         axis_order = osgeo_osr.OAMS_AUTHORITY_COMPLIANT
