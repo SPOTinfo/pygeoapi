@@ -177,13 +177,22 @@ def test_query_with_property_filtering(
 
     p = OGRProvider(config_MapServer_WFS_cities)
 
-    p.query(
-        properties=[
-            ('NA2DESC', 'Greece'),
-            ('NA3DESC', 'Europe'),
-        ]
-    )
+    fields = {
+        'NA2DESC': {'type': 'string'},
+        'NA3DESC': {'type': 'string'},
+    }
+    with mock.patch.object(
+            OGRProvider, 'fields',
+            new_callable=mock.PropertyMock,
+            return_value=fields,
+    ):
+        p.query(
+            properties=[
+                ('NA2DESC', 'Greece'),
+                ('NA3DESC', 'Europe'),
+            ]
+        )
 
     mock_ogr_layer.SetAttributeFilter.assert_called_with(
-        "NA2DESC = 'Greece' and NA3DESC = 'Europe'"
+        "\"NA2DESC\" = 'Greece' and \"NA3DESC\" = 'Europe'"
     )

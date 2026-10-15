@@ -36,6 +36,8 @@ import uuid
 from xml.sax.saxutils import unescape
 
 import pytest
+from requests import HTTPError
+from requests.structures import CaseInsensitiveDict
 
 from pygeoapi import util
 from pygeoapi.api import __version__
@@ -289,6 +291,30 @@ def test_prefetcher():
     assert prefetcher.get_headers('bad_url') == {}
     # URL below will redirect once
     url = 'https://github.com/geopython/pygeoapi/raw/4a18393662583e53b8c7d591130246d9cd2c3f3f/pygeoapi/static/img/pygeoapi.png'  # noqa
+    target = 'https://raw.githubusercontent.com/pygeoapi.png'
+    png = {'content-type': 'image/png', 'content-length': '17861'}
+
+    # Fake HEAD responses to avoid depending on the network
+    def fake_head(href, **kwargs):
+        response = mock.Mock()
+        if href == url and kwargs.get('allow_redirects'):
+            response.headers = CaseInsensitiveDict(png)
+        elif href == url:
+            response.headers = CaseInsensitiveDict({
+                'content-type': 'text/html', 'location': target})
+        elif href == target:
+            response.headers = CaseInsensitiveDict(png)
+        else:
+            response.raise_for_status.side_effect = HTTPError()
+        return response
+
+    with mock.patch.object(prefetcher._session, 'head',
+                           side_effect=fake_head):
+        assert prefetcher.get_headers('https://example.org/404') == {}
+        _check_prefetcher_redirect(prefetcher, url)
+
+
+def _check_prefetcher_redirect(prefetcher, url):
     headers = prefetcher.get_headers(url)
     length = int(headers.get('content-length', 0))
     assert length > 0

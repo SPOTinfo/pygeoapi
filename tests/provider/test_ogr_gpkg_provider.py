@@ -32,10 +32,12 @@
 # Needs to be run like: python3 -m pytest
 
 import logging
+import os
 
 import pytest
 
-from pygeoapi.provider.base import ProviderItemNotFoundError
+from pygeoapi.provider.base import (
+    ProviderInvalidQueryError, ProviderItemNotFoundError)
 from pygeoapi.provider.ogr import OGRProvider
 
 
@@ -87,6 +89,27 @@ def test_get(config_poi_portugal):
     with pytest.raises(ProviderItemNotFoundError):
         item_id = "x' OR (SELECT substr(sql,1,1) FROM sqlite_master WHERE name='secret_table')='C"  # noqa
         p.get(item_id)
+
+
+def test_query_property_injection(config_poi_portugal):
+    """Testing property names cannot inject SQL"""
+
+    config_poi_portugal['include_extra_query_parameters'] = True
+    p = OGRProvider(config_poi_portugal)
+
+    results = p.query(properties=[('fclass', 'cafe')])
+    assert len(results['features']) > 0
+    for feature in results['features']:
+        assert feature['properties']['fclass'] == 'cafe'
+
+    malicious = [
+        '1=1 UNION SELECT * FROM poi_portugal --',
+        'fclass = fclass OR 1',
+        'fclass" = "fclass" OR "1',
+    ]
+    for name in malicious:
+        with pytest.raises(ProviderInvalidQueryError):
+            p.query(properties=[(name, 'cafe')])
 
 
 def test_get_not_existing_feature_raise_exception(
@@ -425,3 +448,57 @@ def test_query_with_property_filtering(config_gpkg_4326):
     assert feature_collection.get('type') == 'FeatureCollection'
     features = feature_collection.get('features')
     assert len(features) == 0
+
+
+def test_query_with_property_filtering_and_offset(config_gpkg_4326):
+    """Testing that paging applies to the filtered features"""
+
+    p = OGRProvider(config_gpkg_4326)
+    properties = [('straatnaam', 'Arnhemseweg')]
+
+    all_ids = [f['id'] for f in p.query(
+        limit=1000, properties=properties)['features']]
+    assert len(all_ids) > 4
+
+    page = p.query(offset=2, limit=2, properties=properties)
+    page_ids = [f['id'] for f in page['features']]
+    assert page_ids == all_ids[2:4]
+    for feature in page['features']:
+        assert feature['properties']['straatnaam'] == 'Arnhemseweg'
+
+    page = p.query(offset=2, limit=2, properties=[
+        ('straatnaam', "Arnhemseweg' OR '1'='1")])
+    assert len(page['features']) == 0
+
+
+def test_query_vrt_with_property_filtering_and_offset(tmp_path):
+    """Testing that paging applies to the filtered features of a VRT,
+    which uses OGR SQL instead of the GeoPackage SQL dialect"""
+
+    source = os.path.abspath('./tests/data/dutch_addresses_4326.gpkg')
+    vrt = tmp_path / 'addresses.vrt'
+    vrt.write_text(
+        '<OGRVRTDataSource><OGRVRTLayer name="addresses">'
+        f'<SrcDataSource>{source}</SrcDataSource>'
+        '<SrcLayer>OGRGeoJSON</SrcLayer>'
+        '</OGRVRTLayer></OGRVRTDataSource>')
+    p = OGRProvider({
+        'name': 'OGR',
+        'type': 'feature',
+        'data': {
+            'source_type': 'VRT',
+            'source': str(vrt),
+            'source_capabilities': {'paging': True},
+        },
+        'id_field': 'id',
+        'layer': 'addresses'
+    })
+    properties = [('straatnaam', 'Arnhemseweg')]
+
+    all_ids = [f['id'] for f in p.query(
+        limit=1000, properties=properties)['features']]
+    assert len(all_ids) > 4
+
+    page = p.query(offset=2, limit=2, properties=properties)
+    page_ids = [f['id'] for f in page['features']]
+    assert page_ids == all_ids[2:4]
