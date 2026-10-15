@@ -310,8 +310,8 @@ class OGRProvider(BaseProvider):
                     raise ProviderInvalidQueryError(user_msg=msg)
 
             attribute_filter = ' and '.join(
-                f'"{name}.replace('"', '""')" = '
-                f'{self.sanitize_attribute_value(value)}'
+                '"' + str(name).replace('"', '""') + '" = '
+                + self.sanitize_attribute_value(value)
                 for name, value in properties
             )
             LOGGER.debug(attribute_filter)
