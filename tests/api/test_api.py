@@ -36,9 +36,11 @@
 import json
 import gzip
 from http import HTTPStatus
+from unittest import mock
 
 from pyld import jsonld
 import pytest
+from requests.structures import CaseInsensitiveDict
 
 from pygeoapi.api import (
     API, APIRequest, CONFORMANCE_CLASSES, __version__, validate_bbox,
@@ -844,8 +846,15 @@ def test_describe_collections_enclosures(config_enclosure, enclosure_api):
         if lnk['rel'] == 'enclosure'
     }
 
+    # Avoid real HEAD requests to remote enclosure links to prevent failing on network errors
+    headers = CaseInsensitiveDict({
+        'content-type': 'image/png',
+        'content-length': '17861',
+    })
     req = mock_api_request()
-    _, _, response = describe_collections(enclosure_api, req, 'objects')
+    with mock.patch.object(enclosure_api.prefetcher, 'get_headers',
+                           return_value=headers):
+        _, _, response = describe_collections(enclosure_api, req, 'objects')
     features = json.loads(response)
     modified_enclosures = {
         lnk['title']: lnk for lnk in features['links']
